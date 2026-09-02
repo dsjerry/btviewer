@@ -1,0 +1,20 @@
+appId: com.btviewer.app
+productName: BTViewer
+directories:
+  buildResources: build
+files:
+  - out/renderer/**/*
+  - out/main/**/*
+  - out/preload/**/*
+extraResources:
+  - from: resources/aria2
+    to: aria2
+win:
+  target: nsis
+  icon: resources/icon.ico
+mac:
+  target: dmg
+  icon: resources/icon.icns
+linux:
+  target: AppImage
+  icon: resources/icon.png

@@ -1,0 +1,35 @@
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import { ipc } from './services/ipc'
+import Home from './components/Home'
+import FileList from './components/FileList'
+import Player from './components/Player'
+import DownloadManager from './components/DownloadManager'
+import type { TorrentStatus, TorrentFileInfo } from './types'
+
+type ViewMode = 'home' | 'files' | 'downloads' | 'player'
+const navItems: Array<{ key: ViewMode; label: string; icon: string }> = [
+  { key: 'home', label: '首页', icon: '⌂' },
+  { key: 'files', label: '媒体库', icon: '▣' },
+  { key: 'downloads', label: '下载任务', icon: '↓' }
+]
+
+const App: React.FC = () => {
+  const [viewMode, setViewMode] = useState<ViewMode>('home')
+  const [torrents, setTorrents] = useState<TorrentStatus[]>([])
+  const [selectedHash, setSelectedHash] = useState<string | null>(null)
+  const [playingFile, setPlayingFile] = useState<TorrentFileInfo | null>(null)
+  const [collapsed, setCollapsed] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const refreshStatuses = useCallback(async () => { try { setTorrents(await ipc.getAllStatuses()); setLoadError(null) } catch (error) { setLoadError(error instanceof Error ? error.message : '无法连接到后台服务') } finally { setLoading(false) } }, [])
+  useEffect(() => { let unsubscribe: () => void = () => undefined; try { unsubscribe = ipc.onStatusUpdate((status) => setTorrents((current) => [...current.filter((item) => item.infoHash !== status.infoHash), status].sort((a, b) => a.name.localeCompare(b.name)))); void refreshStatuses() } catch (error) { setLoadError(error instanceof Error ? error.message : '应用初始化失败'); setLoading(false) }; const timer = window.setInterval(() => void refreshStatuses(), 2000); return () => { unsubscribe(); window.clearInterval(timer) } }, [refreshStatuses])
+  const selectedTorrent = useMemo(() => torrents.find((torrent) => torrent.infoHash === selectedHash) ?? null, [selectedHash, torrents])
+  const activeCount = torrents.filter((torrent) => torrent.status === 'downloading' || torrent.status === 'connecting').length
+  const selectTorrent = (torrent: TorrentStatus) => { setSelectedHash(torrent.infoHash); setViewMode('files') }
+  const added = (status?: TorrentStatus) => { if (status) setSelectedHash(status.infoHash); void refreshStatuses(); setViewMode(status ? 'files' : 'downloads') }
+  const playParsedFile = (status: TorrentStatus, file: TorrentFileInfo) => { setSelectedHash(status.infoHash); setPlayingFile(file); setViewMode('player') }
+  const downloadParsedTask = async (status: TorrentStatus) => { const result = await ipc.downloadTorrent(status.infoHash); if (!result.success) { setLoadError(result.error || '开始下载失败'); return }; await refreshStatuses(); setViewMode('downloads') }
+  const content = loading ? <div className="page-center"><div className="loading-spinner" /><span>正在连接 BT 服务…</span></div> : viewMode === 'home' ? <Home onTorrentAdded={added} onPlayFile={playParsedFile} onDownload={(status) => void downloadParsedTask(status)} /> : viewMode === 'downloads' ? <DownloadManager torrents={torrents} onRefresh={refreshStatuses} onSelect={selectTorrent} /> : viewMode === 'player' && selectedTorrent && playingFile ? <Player infoHash={selectedTorrent.infoHash} file={playingFile} onBack={() => { setPlayingFile(null); setViewMode('files') }} /> : <FileList torrent={selectedTorrent} torrents={torrents} onSelectTorrent={selectTorrent} onPlayFile={(file) => { setPlayingFile(file); setViewMode('player') }} onBack={() => setSelectedHash(null)} />
+  return <div className="app-shell"><aside className={`app-sidebar ${collapsed ? 'is-collapsed' : ''}`}><div className="brand"><span className="brand-mark">◈</span><span className="brand-name">BT<span>Viewer</span></span></div><nav className="main-nav">{navItems.map((item) => <button key={item.key} className={`nav-item ${(viewMode === item.key || (viewMode === 'player' && item.key === 'files')) ? 'is-active' : ''}`} onClick={() => setViewMode(item.key)}><span className="nav-icon">{item.icon}</span><span className="nav-label">{item.label}</span>{item.key === 'downloads' && activeCount > 0 && <b className="nav-count">{activeCount}</b>}</button>)}</nav><div className="sidebar-bottom"><span className="online-dot" />{!collapsed && <span>本地服务在线</span>}</div></aside><main className="app-main"><header className="topbar"><div className="window-drag"><span className="window-title">BTViewer</span><span className="window-context">LOCAL MEDIA WORKSPACE</span></div><div className="topbar-right"><button className="refresh-button no-drag" onClick={() => void refreshStatuses()}><span>↻</span> 刷新</button><div className="window-controls no-drag"><button onClick={() => void ipc.minimizeWindow()} aria-label="最小化">−</button><button onClick={() => void ipc.toggleMaximizeWindow()} aria-label="最大化">□</button><button className="close-control" onClick={() => void ipc.closeWindow()} aria-label="关闭">×</button></div></div></header>{loadError && <div className="error-banner"><span>!</span>{loadError}<button onClick={() => setLoadError(null)}>×</button></div>}<section className="content-area">{content}</section></main></div>
+}
+export default App
