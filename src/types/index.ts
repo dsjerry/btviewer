@@ -27,6 +27,7 @@ export interface AppSettings {
   downloadDir?: string
   trackers?: string
   maxConcurrentDownloads?: number
+  logDir?: string
 }
 
 export interface IPCResult<T = undefined> {

@@ -2,7 +2,7 @@
   "name": "btviewer",
   "version": "1.0.0",
   "description": "BT在线播放桌面应用 - 支持磁力链接和torrent文件在线播放",
-  "main": "out/main/main.js",
+  "main": "release/app/main/main.js",
   "author": "dsjerry",
   "license": "MIT",
   "scripts": {

@@ -163,7 +163,7 @@ function setupIPC() {
     const next = { ...loadSettings(), ...patch }
     saveSettings(next)
     torrentEngine.configure({ downloadDir: next.downloadDir, trackers: next.trackers, maxConcurrentDownloads: next.maxConcurrentDownloads })
-    return { success: true, data: { ...next, downloadDir: torrentEngine.effectiveDownloadDir() } }
+    return { success: true, data: { ...next, downloadDir: torrentEngine.effectiveDownloadDir(), logDir: logger.logDir() } }
   })
 
   ipcMain.handle('shell:open-path', async (_event, path: string) => {

@@ -6,6 +6,8 @@ export default defineConfig({
   main: {
     plugins: [externalizeDepsPlugin()],
     build: {
+      outDir: resolve(__dirname, 'release/app/main'),
+      emptyOutDir: true,
       lib: {
         entry: resolve(__dirname, 'electron/main.ts')
       }
@@ -14,6 +16,8 @@ export default defineConfig({
   preload: {
     plugins: [externalizeDepsPlugin()],
     build: {
+      outDir: resolve(__dirname, 'release/app/preload'),
+      emptyOutDir: true,
       lib: {
         entry: resolve(__dirname, 'electron/preload.ts')
       }
@@ -22,7 +26,7 @@ export default defineConfig({
   renderer: {
     root: resolve(__dirname, 'src'),
     build: {
-      outDir: resolve(__dirname, 'out/renderer'),
+      outDir: resolve(__dirname, 'release/app/renderer'),
       emptyOutDir: true,
       rollupOptions: {
         input: {
