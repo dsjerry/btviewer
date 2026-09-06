@@ -1,7 +1,10 @@
 import React, { useEffect, useState } from 'react'
 import { ipc } from '../services/ipc'
+import pkg from '../../package.json'
 
 interface SettingsState { downloadDir: string; trackers: string; maxConcurrentDownloads: number }
+
+const REPO_URL = 'https://github.com/dsjerry/btviewer'
 
 const Settings: React.FC = () => {
   const [state, setState] = useState<SettingsState | null>(null)
@@ -48,6 +51,11 @@ const Settings: React.FC = () => {
     if (!result.success) setNotice({ type: 'error', text: result.error || '无法打开目录' })
   }
 
+  const openExternal = async (url: string) => {
+    const result = await ipc.openExternal(url)
+    if (!result.success) setNotice({ type: 'error', text: result.error || '无法打开链接' })
+  }
+
   return (
     <div className="page-content">
       <div className="page-heading">
@@ -82,6 +90,20 @@ const Settings: React.FC = () => {
             <button className="primary-action" onClick={() => void save()} disabled={saving}>{saving ? '保存中…' : '保存设置'}<span>→</span></button>
           </div>
           {notice && <div className={`inline-notice ${notice.type}`}>{notice.type === 'error' ? '!' : '✓'} {notice.text}</div>}
+          <div className="about-card">
+            <svg className="about-logo" viewBox="0 0 512 512" aria-label="BTViewer"><rect width="512" height="512" rx="112" fill="#1e1f17"/><rect x="151" y="151" width="210" height="210" rx="34" transform="rotate(45 256 256)" fill="#d8f36a"/><path d="M 219 190 L 343 256 L 219 322 Z" fill="#131309"/></svg>
+            <div className="about-main">
+              <div className="about-title">BTViewer <small>v{pkg.version}</small></div>
+              <p>{pkg.description}</p>
+              <div className="about-meta">
+                <span>作者 <a onClick={() => void openExternal(REPO_URL)} role="button" tabIndex={0}>{pkg.author}</a></span>
+                <span>协议 <a onClick={() => void openExternal('https://opensource.org/license/mit')} role="button" tabIndex={0}>{pkg.license}</a></span>
+                <span>仓库 <a onClick={() => void openExternal(pkg.repository.url.replace('git+', '').replace('.git', ''))} role="button" tabIndex={0}>GitHub</a></span>
+                <span>反馈 <a onClick={() => void openExternal(pkg.bugs.url)} role="button" tabIndex={0}>Issues</a></span>
+              </div>
+              <div className="about-tech">Electron · React · aria2 · video.js</div>
+            </div>
+          </div>
         </>
       )}
     </div>

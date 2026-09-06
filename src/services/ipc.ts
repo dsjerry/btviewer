@@ -16,6 +16,7 @@ export interface ElectronAPI {
   getSettings: () => Promise<IPCResult<AppSettings>>
   saveSettings: (patch: Partial<AppSettings>) => Promise<IPCResult<AppSettings>>
   openPath: (path: string) => Promise<IPCResult>
+  openExternal: (url: string) => Promise<IPCResult>
   onStatusUpdate: (callback: (status: TorrentStatus) => void) => () => void
 }
 
@@ -48,5 +49,6 @@ export const ipc: ElectronAPI = {
   getSettings: () => getElectronAPI().getSettings(),
   saveSettings: (patch) => getElectronAPI().saveSettings(patch),
   openPath: (path) => getElectronAPI().openPath(path),
+  openExternal: (url) => getElectronAPI().openExternal(url),
   onStatusUpdate: (callback) => getElectronAPI().onStatusUpdate(callback)
 }

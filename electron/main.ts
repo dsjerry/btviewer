@@ -169,6 +169,12 @@ function setupIPC() {
     const error = await shell.openPath(path)
     return error ? { success: false, error } : { success: true }
   })
+
+  ipcMain.handle('shell:open-external', async (_event, url: string) => {
+    if (!/^https?:\/\//i.test(url)) return { success: false, error: '仅允许打开 http(s) 链接' }
+    await shell.openExternal(url)
+    return { success: true }
+  })
 }
 
 async function shutdown() {

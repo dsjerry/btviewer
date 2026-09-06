@@ -31,3 +31,13 @@
 .settings-textarea:focus{border-color:#d8f36a}
 .settings-actions{display:flex;width:min(100%,650px);margin-bottom:14px}
 .settings-actions .primary-action{width:auto;flex:none;padding:12px 26px}
+.about-card{display:flex;gap:18px;width:min(100%,650px);margin-top:26px;padding:22px;background:#1a1b16;border:1px solid #383a2c;border-radius:6px}
+.about-logo{flex:none;width:56px;height:56px;border-radius:12px}
+.about-main{min-width:0;flex:1}
+.about-title{color:#f3f0e8;font-size:18px;font-weight:700}
+.about-title small{margin-left:8px;color:#77796d;font:11px 'DM Mono',monospace;font-weight:400}
+.about-main>p{margin:6px 0 12px;color:#8f9086;font-size:12px}
+.about-meta{display:flex;flex-wrap:wrap;gap:8px 18px;color:#77796d;font-size:12px}
+.about-meta a{color:#d8f36a;cursor:pointer;text-decoration:underline;text-underline-offset:3px}
+.about-meta a:hover{color:#e7ff87}
+.about-tech{margin-top:12px;color:#5d5f55;font:11px 'DM Mono',monospace}
