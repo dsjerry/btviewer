@@ -2,6 +2,7 @@ import { app, BrowserWindow, ipcMain, dialog, Menu, shell } from 'electron'
 import { join } from 'path'
 import { torrentEngine } from './torrent-engine'
 import { loadSettings, saveSettings } from './settings'
+import { logger } from './logger'
 import type { TorrentStatus } from '../src/types'
 
 let mainWindow: BrowserWindow | null = null
@@ -156,7 +157,7 @@ function setupIPC() {
     return { success: true, data: result.filePaths[0] }
   })
 
-  ipcMain.handle('settings:get', () => ({ success: true, data: { ...loadSettings(), downloadDir: torrentEngine.effectiveDownloadDir() } }))
+  ipcMain.handle('settings:get', () => ({ success: true, data: { ...loadSettings(), downloadDir: torrentEngine.effectiveDownloadDir(), logDir: logger.logDir() } }))
 
   ipcMain.handle('settings:set', (_event, patch: Record<string, unknown>) => {
     const next = { ...loadSettings(), ...patch }
@@ -185,6 +186,7 @@ async function shutdown() {
 
 app.whenReady().then(async () => {
   Menu.setApplicationMenu(null)
+  logger.cleanup()
   const settings = loadSettings()
   torrentEngine.configure({ downloadDir: settings.downloadDir, trackers: settings.trackers, maxConcurrentDownloads: settings.maxConcurrentDownloads })
   setupIPC()

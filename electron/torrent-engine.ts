@@ -1,9 +1,10 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process'
-import { createReadStream, existsSync, mkdirSync, readFileSync, rmdirSync, rmSync, statSync } from 'fs'
+import { createReadStream, existsSync, mkdirSync, readFileSync, rmdirSync, rmSync, statSync, writeFileSync } from 'fs'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'http'
 import { app } from 'electron'
 import { join, basename, dirname, isAbsolute, relative, resolve } from 'path'
 import { createHash, randomBytes } from 'crypto'
+import { logger } from './logger'
 import type { TorrentFileInfo, TorrentStatus } from '../src/types'
 
 const VIDEO_EXTENSIONS = ['.mp4', '.mkv', '.avi', '.mov', '.webm', '.flv', '.wmv', '.m4v', '.ts', '.rmvb']
@@ -105,22 +106,45 @@ class TorrentEngine {
   private downloadDirOverride = ''
   private trackerOverride = ''
   private maxConcurrent = 0
+  // 任务持久化：hash -> 任务来源（磁力链接 / .torrent 路径），done 表示已完整下载过
+  private taskSources = new Map<string, { source: string; done: boolean }>()
+  private tasksFile = () => join(app.getPath('userData'), 'tasks.json')
 
   // 设置页写入的持久化配置：未启动时仅记录（spawn 时生效），已启动则热应用到 aria2
   configure(options: { downloadDir?: string; trackers?: string; maxConcurrentDownloads?: number }) {
     if (options.downloadDir) {
       this.downloadDirOverride = options.downloadDir
       mkdirSync(options.downloadDir, { recursive: true })
-      if (this.serverPort) void this.rpc('changeGlobalOption', [{ dir: options.downloadDir }]).catch((e) => console.error('[configure] dir failed:', getErrorMessage(e)))
+      if (this.serverPort) void this.rpc('changeGlobalOption', [{ dir: options.downloadDir }]).catch((e) => logger.error('configure', 'dir failed: ' + getErrorMessage(e)))
     }
     if (options.trackers !== undefined) this.trackerOverride = options.trackers
     if (options.maxConcurrentDownloads && options.maxConcurrentDownloads > 0) {
       this.maxConcurrent = options.maxConcurrentDownloads
-      if (this.serverPort) void this.rpc('changeGlobalOption', [{ 'max-concurrent-downloads': String(this.maxConcurrent) }]).catch((e) => console.error('[configure] max-concurrent failed:', getErrorMessage(e)))
+      if (this.serverPort) void this.rpc('changeGlobalOption', [{ 'max-concurrent-downloads': String(this.maxConcurrent) }]).catch((e) => logger.error('configure', 'max-concurrent failed: ' + getErrorMessage(e)))
     }
   }
 
   effectiveDownloadDir() { return this.downloadDirOverride || this.dataDir || join(app.getPath('userData'), 'aria2-downloads') }
+
+  private persistTasks() {
+    try { writeFileSync(this.tasksFile(), JSON.stringify({ tasks: [...this.taskSources].map(([hash, task]) => ({ hash, ...task })) }, null, 2)) } catch (error) { logger.error('tasks', `persist failed: ${getErrorMessage(error)}`) }
+  }
+
+  private restoreTasks() {
+    try {
+      const raw = JSON.parse(readFileSync(this.tasksFile(), 'utf8')) as { tasks?: Array<{ hash: string; source: string; done?: boolean }> }
+      for (const task of raw.tasks || []) {
+        if (!task.source || this.taskSources.has(task.hash)) continue
+        this.taskSources.set(task.hash, { source: task.source, done: !!task.done })
+        logger.info('tasks', `restoring ${task.hash}${task.done ? ' (complete)' : ''}`)
+        void this.addTorrent(task.source, undefined, { wait: false }).catch((error) => {
+          logger.error('tasks', `restore failed for ${task.hash}: ${getErrorMessage(error)}`)
+          this.taskSources.delete(task.hash)
+          this.persistTasks()
+        })
+      }
+    } catch { /* 尚无历史任务文件 */ }
+  }
 
   async startServer() {
     if (this.serverPort) {
@@ -141,7 +165,9 @@ class TorrentEngine {
     if (!address || typeof address === 'string') throw new Error('无法启动本地媒体流服务')
     this.serverPort = address.port
     this.timer = setInterval(() => void this.refreshStatuses(), 1000)
+    logger.cleanup()
     await this.spawnAria2()
+    void this.restoreTasks()
     return this.serverPort
   }
 
@@ -169,14 +195,14 @@ class TorrentEngine {
     this.process = child
     let startupError = ''
     let spawnErrorCode: string | undefined
-    child.stderr.on('data', (chunk) => { startupError += chunk.toString(); console.error('[aria2]', chunk.toString().trim()) })
-    child.on('error', (error: NodeJS.ErrnoException) => { spawnErrorCode = error.code; console.error('[aria2] process error:', getErrorMessage(error)) })
+    child.stderr.on('data', (chunk) => { startupError += chunk.toString(); logger.error('aria2', chunk.toString().trim()) })
+    child.on('error', (error: NodeJS.ErrnoException) => { spawnErrorCode = error.code; logger.error('aria2', 'process error: ' + getErrorMessage(error)) })
     child.on('exit', () => {
       this.process = null
       this.statuses.clear(); this.gidHashes.clear(); this.metadataGids.clear()
       if (this.destroying) return
-      console.error('[aria2] 进程意外退出，正在重启…')
-      void this.respawnAria2()
+      logger.error('aria2', '进程意外退出，正在重启…')
+      void this.respawnAria2().then(() => this.restoreTasks())
     })
     this.rpcUrl = `http://127.0.0.1:${rpcPort}/jsonrpc`
     const deadline = Date.now() + 10000
@@ -189,7 +215,7 @@ class TorrentEngine {
 
   private async respawnAria2(attempts = 3) {
     for (let i = 0; i < attempts && !this.destroying; i++) {
-      try { await this.spawnAria2(); return } catch (error) { console.error('[aria2] 重启失败：', getErrorMessage(error)); await new Promise((resolve) => setTimeout(resolve, 5000)) }
+      try { await this.spawnAria2(); return } catch (error) { logger.error('aria2', '重启失败：' + getErrorMessage(error)); await new Promise((resolve) => setTimeout(resolve, 5000)) }
     }
   }
 
@@ -207,7 +233,7 @@ class TorrentEngine {
     return body.result
   }
 
-  async addTorrent(torrentId: string, onStatus?: (status: TorrentStatus) => void): Promise<TorrentStatus> {
+  async addTorrent(torrentId: string, onStatus?: (status: TorrentStatus) => void, opts: { wait?: boolean } = {}) {
     await this.startServer()
     const id = torrentId.trim()
     const isTorrentFile = id.toLowerCase().endsWith('.torrent')
@@ -229,8 +255,10 @@ class TorrentEngine {
       this.gidHashes.set(gid, key)
       if (onStatus) this.callbacks.set(key, onStatus)
     }
+    this.taskSources.set(key, { source: id, done: false })
+    this.persistTasks()
     if (isTorrentFile) return this.toTorrentStatus(key, first)
-    await this.waitForMetadata(key)
+    if (opts.wait !== false) await this.waitForMetadata(key)
     const status = this.statuses.get(key.toLowerCase()) || this.statuses.get(key)
     if (!status) throw new Error('下载任务正在解析，请稍候')
     return this.toTorrentStatus(key, status)
@@ -292,6 +320,9 @@ class TorrentEngine {
     this.statuses.delete(hash)
     this.callbacks.delete(infoHash)
     this.callbacks.delete(hash)
+    this.taskSources.delete(hash)
+    this.taskSources.delete(infoHash)
+    this.persistTasks()
     for (const gid of gids) this.gidHashes.delete(gid)
     if (destroy) this.removeTaskFiles(status)
   }
@@ -349,6 +380,14 @@ class TorrentEngine {
   private applyStatus(hash: string, status: AriaStatus) {
     const prev = this.statuses.get(hash)
     this.statuses.set(hash, status)
+    const key = this.taskSources.has(hash) ? hash : this.taskSources.has(hash.toLowerCase()) ? hash.toLowerCase() : ''
+    const entry = key ? this.taskSources.get(key)! : undefined
+    // 首次到达 complete 时把任务标记为已完整下载，重启恢复时会自动校验复用数据
+    if (status.status === 'complete' && entry && !entry.done) {
+      entry.done = true
+      this.persistTasks()
+      logger.info('tasks', `download complete: ${hash}`)
+    }
     // 内容没有变化时不触发推送，避免渲染层每秒整体重渲染
     if (prev && JSON.stringify(prev) === JSON.stringify(status)) return
     const listener = this.callbacks.get(hash) || this.callbacks.get(hash.toLowerCase())
@@ -425,4 +464,4 @@ class TorrentEngine {
 }
 function getMime(filename: string) { const ext = filename.toLowerCase().slice(filename.lastIndexOf('.')); return ({ '.mp4': 'video/mp4', '.webm': 'video/webm', '.mkv': 'video/x-matroska', '.mp3': 'audio/mpeg', '.flac': 'audio/flac', '.wav': 'audio/wav', '.ogg': 'audio/ogg' } as Record<string, string>)[ext] || 'application/octet-stream' }
 export const torrentEngine = new TorrentEngine()
-export { getFileType }
+export { getFileType, isUnderRoot, infoHashFromMagnet, torrentInfoHash, trackerList }
