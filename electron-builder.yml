@@ -2,6 +2,7 @@ appId: com.btviewer.app
 productName: BTViewer
 directories:
   buildResources: build
+  output: release
 files:
   - out/renderer/**/*
   - out/main/**/*
