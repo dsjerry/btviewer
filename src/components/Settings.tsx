@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { ipc } from '../services/ipc'
 import pkg from '../../package.json'
 
-interface SettingsState { downloadDir: string; trackers: string; maxConcurrentDownloads: number }
+interface SettingsState { downloadDir: string; trackers: string; maxConcurrentDownloads: number; logDir: string }
 
 const REPO_URL = 'https://github.com/dsjerry/btviewer'
 
@@ -18,7 +18,8 @@ const Settings: React.FC = () => {
         setState({
           downloadDir: result.data.downloadDir || '',
           trackers: result.data.trackers || '',
-          maxConcurrentDownloads: result.data.maxConcurrentDownloads || 5
+          maxConcurrentDownloads: result.data.maxConcurrentDownloads || 5,
+          logDir: result.data.logDir || ''
         })
       } else {
         setNotice({ type: 'error', text: result.error || '读取设置失败' })
@@ -32,7 +33,7 @@ const Settings: React.FC = () => {
     try {
       const result = await ipc.saveSettings({ downloadDir: state.downloadDir, trackers: state.trackers, maxConcurrentDownloads: state.maxConcurrentDownloads })
       if (result.success && result.data) {
-        setState({ downloadDir: result.data.downloadDir || '', trackers: result.data.trackers || '', maxConcurrentDownloads: result.data.maxConcurrentDownloads || 5 })
+        setState({ downloadDir: result.data.downloadDir || '', trackers: result.data.trackers || '', maxConcurrentDownloads: result.data.maxConcurrentDownloads || 5, logDir: result.data.logDir || state.logDir })
         setNotice({ type: 'success', text: '设置已保存并对新任务生效' })
       } else {
         setNotice({ type: 'error', text: result.error || '保存失败' })
@@ -88,6 +89,7 @@ const Settings: React.FC = () => {
           </div>
           <div className="settings-actions">
             <button className="primary-action" onClick={() => void save()} disabled={saving}>{saving ? '保存中…' : '保存设置'}<span>→</span></button>
+            <button className="secondary-action" style={{ width: 'auto', flex: 'none', padding: '12px 20px', marginTop: 0 }} onClick={() => { if (state?.logDir) void ipc.openPath(state.logDir) }}>打开日志目录</button>
           </div>
           {notice && <div className={`inline-notice ${notice.type}`}>{notice.type === 'error' ? '!' : '✓'} {notice.text}</div>}
           <div className="about-card">
@@ -102,6 +104,7 @@ const Settings: React.FC = () => {
                 <span>反馈 <a onClick={() => void openExternal(pkg.bugs.url)} role="button" tabIndex={0}>Issues</a></span>
               </div>
               <div className="about-tech">Electron · React · aria2 · video.js</div>
+              <div className="about-disclaimer">本应用仅提供 BitTorrent 下载与播放功能，请仅用于合法授权的内容；使用者需自行承担使用行为的法律责任。</div>
             </div>
           </div>
         </>

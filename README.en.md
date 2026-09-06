@@ -151,6 +151,10 @@ A magnet link initially only contains the info hash; the client still needs to f
 
 Chromium/Video.js only supports a subset of codecs. Prefer MP4/H.264 or browser-compatible audio formats.
 
+## Disclaimer
+
+This application only implements the BitTorrent protocol for downloading and playback. It does not bundle, recommend or distribute any copyrighted material. Users are responsible for ensuring that what they download and share is legal in their jurisdiction.
+
 ## License
 
 [MIT](./LICENSE)

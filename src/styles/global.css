@@ -41,3 +41,4 @@
 .about-meta a{color:#d8f36a;cursor:pointer;text-decoration:underline;text-underline-offset:3px}
 .about-meta a:hover{color:#e7ff87}
 .about-tech{margin-top:12px;color:#5d5f55;font:11px 'DM Mono',monospace}
+.about-disclaimer{margin-top:12px;padding-top:10px;border-top:1px solid #303229;color:#6c6d63;font-size:11px;line-height:1.6}
