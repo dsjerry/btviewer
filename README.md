@@ -1,6 +1,8 @@
 # BTViewer
 
-BTViewer 是一个基于 Electron 的本地 BT 媒体工具。它负责解析磁力链接或 `.torrent` 文件，并提供保存到媒体库、播放可播放资源和下载全部资源三种操作。
+简体中文 | [English](./README.en.md)
+
+BTViewer 是一个基于 Electron 的本地 BT 媒体工具。它负责解析磁力链接或 `.torrent` 文件，并提供保存到媒体库、播放可播放资源和下载全部资源三种操作。欢迎通过 [Issues](https://github.com/dsjerry/btviewer/issues) 反馈问题，参与贡献请阅读 [CONTRIBUTING.md](./CONTRIBUTING.md)。
 
 ## 当前架构
 
@@ -20,16 +22,18 @@ Video.js 播放器
 
 ## 功能
 
-- 解析磁力链接和 `.torrent` 文件
+- 解析磁力链接和 `.torrent` 文件，解析后展示完整文件列表
 - 解析后选择下一步操作：
   - **保存到媒体库**：保留任务，不自动下载全部文件
-  - **播放**：选择第一个可播放的视频或音频文件，并开始按需下载
+  - **播放**：选择第一个可播放的视频或音频文件，并开始按需下载（数据未就绪时自动等待）
   - **下载全部资源**：选择任务中的全部文件并开始下载
-- 下载任务状态、速度、节点数和进度展示
-- 暂停、恢复和移除任务
-- 本地 HTTP Range 流播放
-- 自定义无边框窗口和深色媒体工作台界面
-- Linux amd64 开发环境内置 aria2c
+- 媒体库管理：浏览任务文件、移除记录或删除任务与已下载文件
+- 下载任务状态、速度、节点数、进度与剩余时间展示，支持暂停、恢复和移除
+- 设置页：自定义下载目录、Tracker 列表、最大同时下载数（持久化并对新任务生效）
+- 本地 HTTP Range 流播放（带访问令牌，防止本机其它进程读取）
+- 自动注入公共 Tracker，支持通过环境变量或设置页自定义
+- 自定义无边框窗口和深色媒体工作台界面，内置应用图标
+- Windows（x64）与 Linux（amd64）开发环境内置 aria2c
 
 ## 环境要求
 
@@ -37,8 +41,8 @@ Video.js 播放器
 - npm
 - Electron 支持的平台
 - aria2c：
-  - Linux 开发环境可使用项目内的 `resources/aria2/aria2c`
-  - Windows 和 macOS 需要准备对应平台的 aria2c 文件
+  - Windows（x64）与 Linux（amd64）开发环境可使用项目内 `resources/aria2` 的二进制
+  - macOS 及其它平台需自备对应平台的 aria2c 文件
 
 也可以通过环境变量指定 aria2c 路径：
 
@@ -129,11 +133,18 @@ electron/
   main.ts              Electron 主进程、窗口和 IPC
   preload.ts           安全 IPC bridge
   torrent-engine.ts    aria2 RPC 与本地媒体流服务
+  settings.ts          应用设置持久化（settings.json）
 src/
-  components/          首页、媒体库、下载任务和播放器
+  components/          首页、媒体库、下载任务、播放器和设置页
   services/ipc.ts      renderer 端 IPC 类型封装
   styles/global.css    自定义视觉系统
-resources/aria2/       随应用分发的 aria2 二进制资源
+scripts/
+  dev.mjs              开发启动器（隔离 ELECTRON_RUN_AS_NODE）
+  generate-icons.mjs   从 logo.svg 生成应用图标
+resources/
+  aria2/               随应用分发的 aria2 二进制资源
+  logo.svg             应用 logo 源文件
+  icon.ico/.icns/.png  打包用图标（由 generate-icons.mjs 生成）
 ```
 
 ## 打包说明
@@ -168,4 +179,4 @@ Chromium/Video.js 对视频编码和容器格式有支持边界。建议优先�
 
 ## 许可证
 
-MIT
+[MIT](./LICENSE)
