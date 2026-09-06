@@ -29,7 +29,7 @@ async function createWindow() {
       preload: join(__dirname, '../preload/preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false
+      sandbox: true
     },
     titleBarStyle: 'hiddenInset',
     backgroundColor: '#0b1020'
@@ -41,7 +41,8 @@ async function createWindow() {
 
   try {
     if (isDev) {
-      await mainWindow.loadURL('http://localhost:5173')
+      // electron-vite 注入的 dev server 地址，避免多实例时连到别的实例
+      await mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL || 'http://localhost:5173')
     } else {
       await mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
     }
@@ -108,9 +109,9 @@ function setupIPC() {
     }
   })
 
-  ipcMain.handle('torrent:download', async (_event, infoHash: string) => {
+  ipcMain.handle('torrent:download', async (_event, infoHash: string, filePaths?: string[]) => {
     try {
-      await torrentEngine.downloadTorrent(infoHash)
+      await torrentEngine.downloadTorrent(infoHash, filePaths)
       return { success: true }
     } catch (error) {
       return { success: false, error: getErrorMessage(error) }

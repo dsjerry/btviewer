@@ -8,7 +8,7 @@ export interface ElectronAPI {
   removeTorrent: (infoHash: string, destroy?: boolean) => Promise<IPCResult>
   pauseTorrent: (infoHash: string) => Promise<IPCResult>
   resumeTorrent: (infoHash: string) => Promise<IPCResult>
-  downloadTorrent: (infoHash: string) => Promise<IPCResult>
+  downloadTorrent: (infoHash: string, filePaths?: string[]) => Promise<IPCResult>
   getAllStatuses: () => Promise<TorrentStatus[]>
   getStreamUrl: (infoHash: string, filePath: string) => Promise<string>
   openFile: () => Promise<IPCResult<TorrentStatus>>
@@ -36,7 +36,7 @@ export const ipc: ElectronAPI = {
   removeTorrent: (infoHash, destroy) => getElectronAPI().removeTorrent(infoHash, destroy),
   pauseTorrent: (infoHash) => getElectronAPI().pauseTorrent(infoHash),
   resumeTorrent: (infoHash) => getElectronAPI().resumeTorrent(infoHash),
-  downloadTorrent: (infoHash) => getElectronAPI().downloadTorrent(infoHash),
+  downloadTorrent: (infoHash, filePaths) => getElectronAPI().downloadTorrent(infoHash, filePaths),
   getAllStatuses: () => getElectronAPI().getAllStatuses(),
   getStreamUrl: (infoHash, filePath) => getElectronAPI().getStreamUrl(infoHash, filePath),
   openFile: () => getElectronAPI().openFile(),

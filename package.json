@@ -6,7 +6,7 @@
   "author": "BTViewer",
   "license": "MIT",
   "scripts": {
-    "dev": "cross-env ELECTRON_RUN_AS_NODE= electron-vite dev -- --no-sandbox --disable-gpu",
+    "dev": "node scripts/dev.mjs",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.json"

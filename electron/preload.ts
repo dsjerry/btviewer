@@ -10,7 +10,7 @@ const electronAPI = {
   removeTorrent: (infoHash: string, destroy = false) => ipcRenderer.invoke('torrent:remove', infoHash, destroy),
   pauseTorrent: (infoHash: string) => ipcRenderer.invoke('torrent:pause', infoHash),
   resumeTorrent: (infoHash: string) => ipcRenderer.invoke('torrent:resume', infoHash),
-  downloadTorrent: (infoHash: string) => ipcRenderer.invoke('torrent:download', infoHash),
+  downloadTorrent: (infoHash: string, filePaths?: string[]) => ipcRenderer.invoke('torrent:download', infoHash, filePaths),
   getAllStatuses: () => ipcRenderer.invoke('torrent:all-status'),
   getStreamUrl: (infoHash: string, filePath: string) => ipcRenderer.invoke('torrent:get-stream-url', infoHash, filePath),
   openFile: () => ipcRenderer.invoke('dialog:open-file'),

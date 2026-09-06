@@ -53,6 +53,19 @@ sudo apt update
 sudo apt install aria2
 ```
 
+## 公共 Tracker 与 DHT
+
+裸磁力链（只有 info-hash、没有 `tr=` 参数）只能通过 DHT 网络发现节点。部分网络会屏蔽 DHT 引导节点（表现为解析长期 0 节点），此时 tracker 是主要出路。应用会为每个任务自动注入内置的公共 tracker 快照，并支持环境变量覆盖：
+
+```bash
+# 覆盖注入的 tracker 列表（逗号或空白分隔）
+ARIA2_TRACKERS="udp://tracker.example.org:1337/announce,https://tracker.example.com:443/announce" npm run dev
+
+# 指定 DHT 引导节点（默认使用 router.bittorrent.com 等标准节点）
+ARIA2_DHT_ENTRY_POINT="dht.example.org:6881" npm run dev
+ARIA2_DHT_ENTRY_POINT6="[2001:db8::1]:6881" npm run dev
+```
+
 ## 开发
 
 安装依赖：
@@ -81,13 +94,33 @@ npm run build
 
 ## 测试磁力链接
 
-下面的链接用于测试解析、节点发现、metadata 获取和媒体文件列表：
+以下链接均为 Blender 基金会开源电影（CC 授权、全球节点充足），用于测试解析、下载和播放：
+
+**Sintel**（约 1.06 GB，MP4/H.264 可直接播放）
 
 ```text
-magnet:?xt=urn:btih:2DD9DE911E0AEADCE51C9A6D6DF96B21C0524458
+magnet:?xt=urn:btih:08ada5a7a6183aae1e09d831df6748d566095a10&dn=Sintel&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337&tr=udp%3A%2F%2Fopen.demonii.com%3A1337&tr=udp%3A%2F%2Ftracker.openbittorrent.com%3A80
 ```
 
-该链接只包含 info hash，没有显式 Tracker。是否能获取 metadata 取决于资源当前是否仍有活跃 peer，以及当前网络是否允许 DHT、UDP Tracker 和 BitTorrent Peer 连接。
+**Big Buck Bunny**（约 263 MB，体积小，适合完整下载 + 播放验证）
+
+```text
+magnet:?xt=urn:btih:dd8255ecdc7ca55fb0bbf81323d87062db1f6d1c&dn=Big+Buck+Bunny&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337&tr=udp%3A%2F%2Fopen.demonii.com%3A1337&tr=udp%3A%2F%2Ftracker.openbittorrent.com%3A80
+```
+
+**Cosmos Laundromat**（约 700 MB）
+
+```text
+magnet:?xt=urn:btih:c9e15763f722f23e98a29decdfae341b98d53056&dn=Cosmos+Laundromat&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337&tr=udp%3A%2F%2Fopen.demonii.com%3A1337&tr=udp%3A%2F%2Ftracker.openbittorrent.com%3A80
+```
+
+**裸磁力链版 Sintel**（不带任何 `tr=`，用于验证公共 tracker 自动注入——部分网络屏蔽 DHT 时，tracker 是主要节点来源）
+
+```text
+magnet:?xt=urn:btih:08ada5a7a6183aae1e09d831df6748d566095a10
+```
+
+是否能获取 metadata 取决于资源当前是否仍有活跃 peer，以及当前网络是否允许 DHT、UDP Tracker 和 BitTorrent Peer 连接。裸磁力链解析失败时，可先确认 tracker 是否可达，或通过 `ARIA2_TRACKERS` / `ARIA2_DHT_ENTRY_POINT` 调整（见上文）。
 
 ## 目录说明
 

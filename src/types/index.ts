@@ -5,7 +5,7 @@ export interface TorrentFileInfo {
   type: 'video' | 'audio' | 'subtitle' | 'other'
 }
 
-export type TorrentStatusType = 'connecting' | 'downloading' | 'seeding' | 'paused' | 'error'
+export type TorrentStatusType = 'parsing' | 'connecting' | 'downloading' | 'seeding' | 'paused' | 'error'
 
 export interface TorrentStatus {
   infoHash: string
