@@ -4,13 +4,15 @@ import Home from './components/Home'
 import FileList from './components/FileList'
 import Player from './components/Player'
 import DownloadManager from './components/DownloadManager'
+import Settings from './components/Settings'
 import type { TorrentStatus, TorrentFileInfo } from './types'
 
-type ViewMode = 'home' | 'files' | 'downloads' | 'player'
+type ViewMode = 'home' | 'files' | 'downloads' | 'player' | 'settings'
 const navItems: Array<{ key: ViewMode; label: string; icon: string }> = [
   { key: 'home', label: '首页', icon: '⌂' },
   { key: 'files', label: '媒体库', icon: '▣' },
-  { key: 'downloads', label: '下载任务', icon: '↓' }
+  { key: 'downloads', label: '下载任务', icon: '↓' },
+  { key: 'settings', label: '设置', icon: '⚙' }
 ]
 
 const App: React.FC = () => {
@@ -35,8 +37,14 @@ const App: React.FC = () => {
     if (!result.success) setLoadError(result.error || '启动媒体下载失败')
   }
   const playParsedFile = (status: TorrentStatus, file: TorrentFileInfo) => void startPlay(status, file)
+  const removeTorrent = async (torrent: TorrentStatus, destroy: boolean) => {
+    const result = await ipc.removeTorrent(torrent.infoHash, destroy)
+    if (!result.success) { setLoadError(result.error || '删除失败'); return }
+    if (selectedHash === torrent.infoHash) { setSelectedHash(null); setPlayingFile(null) }
+    await refreshStatuses()
+  }
   const downloadParsedTask = async (status: TorrentStatus) => { const result = await ipc.downloadTorrent(status.infoHash); if (!result.success) { setLoadError(result.error || '开始下载失败'); return }; await refreshStatuses(); setViewMode('downloads') }
-  const content = loading ? <div className="page-center"><div className="loading-spinner" /><span>正在连接 BT 服务…</span></div> : viewMode === 'home' ? <Home onTorrentAdded={added} onPlayFile={playParsedFile} onDownload={(status) => void downloadParsedTask(status)} /> : viewMode === 'downloads' ? <DownloadManager torrents={torrents} onRefresh={refreshStatuses} onSelect={selectTorrent} /> : viewMode === 'player' && selectedTorrent && playingFile ? <Player infoHash={selectedTorrent.infoHash} file={playingFile} onBack={() => { setPlayingFile(null); setViewMode('files') }} /> : <FileList torrent={selectedTorrent} torrents={torrents} onSelectTorrent={selectTorrent} onPlayFile={(file) => { if (selectedTorrent) void startPlay(selectedTorrent, file) }} onBack={() => setSelectedHash(null)} />
+  const content = loading ? <div className="page-center"><div className="loading-spinner" /><span>正在连接 BT 服务…</span></div> : viewMode === 'home' ? <Home onTorrentAdded={added} onPlayFile={playParsedFile} onDownload={(status) => void downloadParsedTask(status)} /> : viewMode === 'downloads' ? <DownloadManager torrents={torrents} onRefresh={refreshStatuses} onSelect={selectTorrent} /> : viewMode === 'settings' ? <Settings /> : viewMode === 'player' && selectedTorrent && playingFile ? <Player infoHash={selectedTorrent.infoHash} file={playingFile} onBack={() => { setPlayingFile(null); setViewMode('files') }} /> : <FileList torrent={selectedTorrent} torrents={torrents} onSelectTorrent={selectTorrent} onPlayFile={(file) => { if (selectedTorrent) void startPlay(selectedTorrent, file) }} onRemove={(torrent, destroy) => void removeTorrent(torrent, destroy)} onBack={() => setSelectedHash(null)} />
   return <div className="app-shell"><aside className={`app-sidebar ${collapsed ? 'is-collapsed' : ''}`}><div className="brand"><span className="brand-mark">◈</span><span className="brand-name">BT<span>Viewer</span></span></div><nav className="main-nav">{navItems.map((item) => <button key={item.key} className={`nav-item ${(viewMode === item.key || (viewMode === 'player' && item.key === 'files')) ? 'is-active' : ''}`} onClick={() => setViewMode(item.key)}><span className="nav-icon">{item.icon}</span><span className="nav-label">{item.label}</span>{item.key === 'downloads' && activeCount > 0 && <b className="nav-count">{activeCount}</b>}</button>)}</nav><div className="sidebar-bottom"><span className="online-dot" />{!collapsed && <span>本地服务在线</span>}</div></aside><main className="app-main"><header className="topbar"><div className="window-drag"><span className="window-title">BTViewer</span><span className="window-context">LOCAL MEDIA WORKSPACE</span></div><div className="topbar-right"><button className="refresh-button no-drag" onClick={() => void refreshStatuses()}><span>↻</span> 刷新</button><div className="window-controls no-drag"><button onClick={() => void ipc.minimizeWindow()} aria-label="最小化">−</button><button onClick={() => void ipc.toggleMaximizeWindow()} aria-label="最大化">□</button><button className="close-control" onClick={() => void ipc.closeWindow()} aria-label="关闭">×</button></div></div></header>{loadError && <div className="error-banner"><span>!</span>{loadError}<button onClick={() => setLoadError(null)}>×</button></div>}<section className="content-area">{content}</section></main></div>
 }
 export default App

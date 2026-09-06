@@ -14,6 +14,10 @@ const electronAPI = {
   getAllStatuses: () => ipcRenderer.invoke('torrent:all-status'),
   getStreamUrl: (infoHash: string, filePath: string) => ipcRenderer.invoke('torrent:get-stream-url', infoHash, filePath),
   openFile: () => ipcRenderer.invoke('dialog:open-file'),
+  pickDownloadDir: () => ipcRenderer.invoke('dialog:pick-download-dir'),
+  getSettings: () => ipcRenderer.invoke('settings:get'),
+  saveSettings: (patch: Record<string, unknown>) => ipcRenderer.invoke('settings:set', patch),
+  openPath: (path: string) => ipcRenderer.invoke('shell:open-path'),
   onStatusUpdate: (callback: StatusListener) => {
     const listener = (_event: Electron.IpcRendererEvent, status: unknown) => callback(status)
     ipcRenderer.on('torrent:status-update', listener)

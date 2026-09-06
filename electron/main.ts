@@ -1,6 +1,7 @@
-import { app, BrowserWindow, ipcMain, dialog, Menu } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, Menu, shell } from 'electron'
 import { join } from 'path'
 import { torrentEngine } from './torrent-engine'
+import { loadSettings, saveSettings } from './settings'
 import type { TorrentStatus } from '../src/types'
 
 let mainWindow: BrowserWindow | null = null
@@ -124,8 +125,7 @@ function setupIPC() {
     return torrentEngine.getStreamUrl(infoHash, filePath)
   })
 
-  ipcMain.handle('dialog:open-file', async () => {
-    if (!mainWindow || mainWindow.isDestroyed()) {
+  ipcMain.handle('dialog:open-file', async () => {    if (!mainWindow || mainWindow.isDestroyed()) {
       return { success: false, error: '窗口尚未准备好' }
     }
 
@@ -148,6 +148,27 @@ function setupIPC() {
       return { success: false, error: getErrorMessage(error) }
     }
   })
+
+  ipcMain.handle('dialog:pick-download-dir', async () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return { success: false, error: '窗口尚未准备好' }
+    const result = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory', 'createDirectory'] })
+    if (result.canceled || result.filePaths.length === 0) return { success: false, canceled: true }
+    return { success: true, data: result.filePaths[0] }
+  })
+
+  ipcMain.handle('settings:get', () => ({ success: true, data: { ...loadSettings(), downloadDir: torrentEngine.effectiveDownloadDir() } }))
+
+  ipcMain.handle('settings:set', (_event, patch: Record<string, unknown>) => {
+    const next = { ...loadSettings(), ...patch }
+    saveSettings(next)
+    torrentEngine.configure({ downloadDir: next.downloadDir, trackers: next.trackers, maxConcurrentDownloads: next.maxConcurrentDownloads })
+    return { success: true, data: { ...next, downloadDir: torrentEngine.effectiveDownloadDir() } }
+  })
+
+  ipcMain.handle('shell:open-path', async (_event, path: string) => {
+    const error = await shell.openPath(path)
+    return error ? { success: false, error } : { success: true }
+  })
 }
 
 async function shutdown() {
@@ -158,6 +179,8 @@ async function shutdown() {
 
 app.whenReady().then(async () => {
   Menu.setApplicationMenu(null)
+  const settings = loadSettings()
+  torrentEngine.configure({ downloadDir: settings.downloadDir, trackers: settings.trackers, maxConcurrentDownloads: settings.maxConcurrentDownloads })
   setupIPC()
   try {
     const serverPort = await torrentEngine.startServer()

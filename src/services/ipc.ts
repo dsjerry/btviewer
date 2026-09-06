@@ -1,4 +1,4 @@
-import type { IPCResult, TorrentStatus } from '../types'
+import type { AppSettings, IPCResult, TorrentStatus } from '../types'
 
 export interface ElectronAPI {
   minimizeWindow: () => Promise<{ success: boolean }>
@@ -12,6 +12,10 @@ export interface ElectronAPI {
   getAllStatuses: () => Promise<TorrentStatus[]>
   getStreamUrl: (infoHash: string, filePath: string) => Promise<string>
   openFile: () => Promise<IPCResult<TorrentStatus>>
+  pickDownloadDir: () => Promise<IPCResult<string>>
+  getSettings: () => Promise<IPCResult<AppSettings>>
+  saveSettings: (patch: Partial<AppSettings>) => Promise<IPCResult<AppSettings>>
+  openPath: (path: string) => Promise<IPCResult>
   onStatusUpdate: (callback: (status: TorrentStatus) => void) => () => void
 }
 
@@ -40,5 +44,9 @@ export const ipc: ElectronAPI = {
   getAllStatuses: () => getElectronAPI().getAllStatuses(),
   getStreamUrl: (infoHash, filePath) => getElectronAPI().getStreamUrl(infoHash, filePath),
   openFile: () => getElectronAPI().openFile(),
+  pickDownloadDir: () => getElectronAPI().pickDownloadDir(),
+  getSettings: () => getElectronAPI().getSettings(),
+  saveSettings: (patch) => getElectronAPI().saveSettings(patch),
+  openPath: (path) => getElectronAPI().openPath(path),
   onStatusUpdate: (callback) => getElectronAPI().onStatusUpdate(callback)
 }

@@ -46,8 +46,9 @@ function executablePath() {
   const bundled = app.isPackaged ? join(process.resourcesPath, 'aria2', name) : join(app.getAppPath(), 'resources', 'aria2', name)
   return process.env.ARIA2C_PATH || (existsSync(bundled) ? bundled : 'aria2c')
 }
-function trackerList() {
-  const custom = (process.env.ARIA2_TRACKERS || '').split(/[\s,]+/).filter(Boolean)
+function trackerList(override = '') {
+  // 优先级：设置页自定义 > ARIA2_TRACKERS 环境变量 > 内置快照
+  const custom = (override || process.env.ARIA2_TRACKERS || '').split(/[\s,]+/).filter(Boolean)
   return (custom.length ? custom : DEFAULT_TRACKERS).join(',')
 }
 
@@ -101,6 +102,25 @@ class TorrentEngine {
   private destroying = false
   private spawning: Promise<void> | null = null
   private refreshing = false
+  private downloadDirOverride = ''
+  private trackerOverride = ''
+  private maxConcurrent = 0
+
+  // 设置页写入的持久化配置：未启动时仅记录（spawn 时生效），已启动则热应用到 aria2
+  configure(options: { downloadDir?: string; trackers?: string; maxConcurrentDownloads?: number }) {
+    if (options.downloadDir) {
+      this.downloadDirOverride = options.downloadDir
+      mkdirSync(options.downloadDir, { recursive: true })
+      if (this.serverPort) void this.rpc('changeGlobalOption', [{ dir: options.downloadDir }]).catch((e) => console.error('[configure] dir failed:', getErrorMessage(e)))
+    }
+    if (options.trackers !== undefined) this.trackerOverride = options.trackers
+    if (options.maxConcurrentDownloads && options.maxConcurrentDownloads > 0) {
+      this.maxConcurrent = options.maxConcurrentDownloads
+      if (this.serverPort) void this.rpc('changeGlobalOption', [{ 'max-concurrent-downloads': String(this.maxConcurrent) }]).catch((e) => console.error('[configure] max-concurrent failed:', getErrorMessage(e)))
+    }
+  }
+
+  effectiveDownloadDir() { return this.downloadDirOverride || this.dataDir || join(app.getPath('userData'), 'aria2-downloads') }
 
   async startServer() {
     if (this.serverPort) {
@@ -113,7 +133,7 @@ class TorrentEngine {
   }
 
   private async start(): Promise<number> {
-    this.dataDir = join(app.getPath('userData'), 'aria2-downloads')
+    this.dataDir = this.downloadDirOverride || join(app.getPath('userData'), 'aria2-downloads')
     mkdirSync(this.dataDir, { recursive: true })
     this.server = createServer((request, response) => this.handleStream(request, response))
     await new Promise<void>((resolve, reject) => { this.server?.once('error', reject); this.server?.listen(0, '127.0.0.1', () => resolve()) })
@@ -144,6 +164,7 @@ class TorrentEngine {
     // 部分网络屏蔽默认 DHT 引导节点，允许通过环境变量指定可达的引导入口
     if (process.env.ARIA2_DHT_ENTRY_POINT) args.push(`--dht-entry-point=${process.env.ARIA2_DHT_ENTRY_POINT}`)
     if (process.env.ARIA2_DHT_ENTRY_POINT6) args.push(`--dht-entry-point6=${process.env.ARIA2_DHT_ENTRY_POINT6}`)
+    if (this.maxConcurrent) args.push(`--max-concurrent-downloads=${this.maxConcurrent}`)
     const child = spawn(binary, args, { windowsHide: true, env })
     this.process = child
     let startupError = ''
@@ -199,7 +220,7 @@ class TorrentEngine {
       if (!existing.files?.length) await this.waitForMetadata(hash)
       return this.toTorrentStatus(hash, this.statuses.get(hash) || existing)
     }
-    const options = { 'seed-time': '0', 'bt-tracker': trackerList(), ...(isTorrentFile ? { pause: 'true' } : { 'pause-metadata': 'true', 'bt-save-metadata': 'true' }) }
+    const options = { 'seed-time': '0', 'bt-tracker': trackerList(this.trackerOverride), ...(isTorrentFile ? { pause: 'true' } : { 'pause-metadata': 'true', 'bt-save-metadata': 'true' }) }
     const gid = await this.rpc<string>('addUri', [[id], options])
     if (!isTorrentFile) this.metadataGids.add(gid)
     const first = await this.refreshGid(gid, hash || gid, onStatus)
@@ -262,6 +283,8 @@ class TorrentEngine {
     const gids = new Set<string>([status.gid])
     for (const [gid, h] of this.gidHashes) if (h === hash || h === infoHash) gids.add(gid)
     for (const gid of gids) {
+      // remove 用于活动/暂停中的任务，removeDownloadResult 用于已停止任务的记录清理；各司其职、互为兜底
+      await this.rpc('remove', [gid]).catch(() => undefined)
       await this.rpc('removeDownloadResult', [gid]).catch(() => undefined)
       this.metadataGids.delete(gid)
     }

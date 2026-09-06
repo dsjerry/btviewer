@@ -23,6 +23,12 @@ export interface TorrentStatus {
   error?: string
 }
 
+export interface AppSettings {
+  downloadDir?: string
+  trackers?: string
+  maxConcurrentDownloads?: number
+}
+
 export interface IPCResult<T = undefined> {
   success: boolean
   data?: T
