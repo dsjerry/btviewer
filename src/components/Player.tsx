@@ -10,7 +10,7 @@ type VjsPlayer = ReturnType<typeof videojs>
 type SubtitleTrack = TextTrack & { mode: 'disabled' | 'hidden' | 'showing'; label: string }
 type RemoteTrackElement = ReturnType<VjsPlayer['addRemoteTextTrack']> & { track: SubtitleTrack }
 
-interface PlayerProps { infoHash: string; file: TorrentFileInfo; subtitles: TorrentFileInfo[]; onBack: () => void }
+interface PlayerProps { infoHash: string; file: TorrentFileInfo; subtitles: TorrentFileInfo[]; playlist: TorrentFileInfo[]; onSelectFile: (file: TorrentFileInfo) => void; onBack: () => void }
 
 const MIME: Record<string, string> = {
   '.mp4': 'video/mp4', '.webm': 'video/webm', '.m4v': 'video/mp4', '.mov': 'video/quicktime',
@@ -45,7 +45,7 @@ async function probeStream(url: string, signal: AbortSignal): Promise<StreamStat
   }
 }
 
-const Player: React.FC<PlayerProps> = ({ infoHash, file, subtitles, onBack }) => {
+const Player: React.FC<PlayerProps> = ({ infoHash, file, subtitles, playlist, onSelectFile, onBack }) => {
   const containerRef = useRef<HTMLDivElement>(null)
   const playerRef = useRef<VjsPlayer | null>(null)
   const trackElementsRef = useRef<RemoteTrackElement[]>([])
@@ -57,6 +57,17 @@ const Player: React.FC<PlayerProps> = ({ infoHash, file, subtitles, onBack }) =>
   const [resumeNotice, setResumeNotice] = useState<string | null>(null)
   const [subtitleItems, setSubtitleItems] = useState<Array<{ name: string; url: string }>>([])
   const [selectedSubtitle, setSelectedSubtitle] = useState(-1)
+  const [autoPlay, setAutoPlay] = useState(() => localStorage.getItem('btviewer-autoplay') !== 'off')
+
+  // 播完连播需要读取最新值：列表/回调随任务状态刷新重建，用 ref 提供给一次性注册的事件
+  const playlistRef = useRef(playlist); playlistRef.current = playlist
+  const fileRef = useRef(file); fileRef.current = file
+  const onSelectFileRef = useRef(onSelectFile); onSelectFileRef.current = onSelectFile
+  const autoPlayRef = useRef(autoPlay); autoPlayRef.current = autoPlay
+
+  const currentIndex = playlist.findIndex((item) => item.path === file.path)
+  const playIndex = (index: number) => { const target = playlist[index]; if (target) onSelectFile(target) }
+  const toggleAutoPlay = () => setAutoPlay((value) => { localStorage.setItem('btviewer-autoplay', value ? 'off' : 'on'); return !value })
 
   // 任务状态每秒刷新会让 files 数组身份不断变化，用路径签名避免重复请求字幕 URL
   const subtitleKey = subtitles.map((item) => item.path).join('\n')
@@ -169,6 +180,13 @@ const Player: React.FC<PlayerProps> = ({ infoHash, file, subtitles, onBack }) =>
           }
         })()
       })
+      // 播完自动连播：切到播放列表中的下一个媒体（新文件未就绪时由探测重试逻辑接管）
+      player.on('ended', () => {
+        if (!active || !autoPlayRef.current) return
+        const list = playlistRef.current
+        const index = list.findIndex((item) => item.path === fileRef.current.path)
+        if (index >= 0 && index < list.length - 1) onSelectFileRef.current(list[index + 1])
+      })
       setPlayerReady((value) => value + 1)
       setLoading(false)
     }
@@ -204,6 +222,6 @@ const Player: React.FC<PlayerProps> = ({ infoHash, file, subtitles, onBack }) =>
     }
   }, [infoHash, file.path, file.name])
 
-  return <div className="player-page"><header className="player-header"><button className="back-link" onClick={onBack}>← 返回媒体库</button><div className="player-heading"><span className={`file-icon ${file.type}`}>{file.type === 'audio' ? '♫' : '▶'}</span><div><h2>{file.name}</h2><p>{file.type === 'audio' ? '音频播放' : '视频播放'}</p></div></div>{subtitleItems.length > 0 && <label className="subtitle-picker"><span>CC</span><select value={selectedSubtitle} onChange={(event) => changeSubtitle(event.target.value)}><option value={-1}>关闭字幕</option>{subtitleItems.map((item, index) => <option key={item.url} value={index}>{item.name}</option>)}</select></label>}</header><div className="player-stage"><div ref={containerRef} className="player-container" />{loading && <div className="player-overlay"><div className="loading-spinner" /><span>{statusText}</span></div>}{error && <div className="player-overlay player-error"><span>{error}</span><button className="secondary-action" onClick={onBack}>返回媒体库</button></div>}{!loading && !error && resumeNotice && <div className="resume-toast">{resumeNotice}</div>}</div></div>
+  return <div className="player-page"><header className="player-header"><button className="back-link" onClick={onBack}>← 返回媒体库</button><div className="player-heading"><span className={`file-icon ${file.type}`}>{file.type === 'audio' ? '♫' : '▶'}</span><div><h2>{file.name}</h2><p>{file.type === 'audio' ? '音频播放' : '视频播放'}</p></div></div>{playlist.length > 1 && <div className="playlist-controls"><button className="playlist-button" disabled={currentIndex <= 0} onClick={() => playIndex(currentIndex - 1)} title="上一集">⏮</button><span className="playlist-index">{currentIndex + 1} / {playlist.length}</span><button className="playlist-button" disabled={currentIndex < 0 || currentIndex >= playlist.length - 1} onClick={() => playIndex(currentIndex + 1)} title="下一集">⏭</button><button className={`playlist-button autoplay-toggle ${autoPlay ? 'is-on' : ''}`} onClick={toggleAutoPlay} title="播放结束后自动播放下一集">连播{autoPlay ? '开' : '关'}</button></div>}{subtitleItems.length > 0 && <label className="subtitle-picker"><span>CC</span><select value={selectedSubtitle} onChange={(event) => changeSubtitle(event.target.value)}><option value={-1}>关闭字幕</option>{subtitleItems.map((item, index) => <option key={item.url} value={index}>{item.name}</option>)}</select></label>}</header><div className="player-stage"><div ref={containerRef} className="player-container" />{loading && <div className="player-overlay"><div className="loading-spinner" /><span>{statusText}</span></div>}{error && <div className="player-overlay player-error"><span>{error}</span><button className="secondary-action" onClick={onBack}>返回媒体库</button></div>}{!loading && !error && resumeNotice && <div className="resume-toast">{resumeNotice}</div>}</div></div>
 }
 export default Player

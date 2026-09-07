@@ -42,9 +42,16 @@
 .about-meta a:hover{color:#e7ff87}
 .about-tech{margin-top:12px;color:#5d5f55;font:11px 'DM Mono',monospace}
 /* 播放器：字幕选择器（头部右侧） */
-.subtitle-picker{display:flex;align-items:center;gap:8px;margin-left:auto;color:#838579;font:11px 'DM Mono',monospace}
+.player-header .player-heading{flex:1}
+.subtitle-picker{display:flex;align-items:center;gap:8px;color:#838579;font:11px 'DM Mono',monospace}
 .subtitle-picker select{padding:7px 10px;max-width:260px;color:#ecebdc;background:#11110f;border:1px solid #46483a;border-radius:4px;outline:none;cursor:pointer}
 .subtitle-picker select:hover{border-color:#d8f36a}
+/* 播放器：播放列表（上一/下一集 + 连播开关） */
+.playlist-controls{display:flex;align-items:center;gap:7px;flex:none}
+.playlist-button{padding:6px 10px;color:#d4d5c7;background:transparent;border:1px solid #46483a;border-radius:4px;font-size:12px}
+.playlist-button:hover:enabled{border-color:#d8f36a;color:#d8f36a}
+.playlist-button.autoplay-toggle.is-on{color:#d8f36a;border-color:#59683b;background:#29351e}
+.playlist-index{min-width:52px;color:#77796d;font:12px 'DM Mono',monospace;text-align:center}
 /* 播放器：续播提示 */
 .resume-toast{position:absolute;top:18px;left:50%;transform:translateX(-50%);padding:9px 16px;color:#c9f887;background:rgba(37,50,27,.92);border:1px solid #59683b;border-radius:4px;font-size:13px;pointer-events:none;z-index:2}
 /* 首页：拖放遮罩 */
