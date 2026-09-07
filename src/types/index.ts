@@ -27,6 +27,7 @@ export interface AppSettings {
   downloadDir?: string
   trackers?: string
   maxConcurrentDownloads?: number
+  speedLimit?: string
   logDir?: string
 }
 

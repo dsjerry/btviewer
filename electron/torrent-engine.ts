@@ -122,12 +122,13 @@ class TorrentEngine {
   private downloadDirOverride = ''
   private trackerOverride = ''
   private maxConcurrent = 0
+  private speedLimit = ''
   // 任务持久化：hash -> 任务来源（磁力链接 / .torrent 路径），done 表示已完整下载过
   private taskSources = new Map<string, { source: string; done: boolean }>()
   private tasksFile = () => join(app.getPath('userData'), 'tasks.json')
 
   // 设置页写入的持久化配置：未启动时仅记录（spawn 时生效），已启动则热应用到 aria2
-  configure(options: { downloadDir?: string; trackers?: string; maxConcurrentDownloads?: number }) {
+  configure(options: { downloadDir?: string; trackers?: string; maxConcurrentDownloads?: number; speedLimit?: string }) {
     if (options.downloadDir) {
       this.downloadDirOverride = options.downloadDir
       mkdirSync(options.downloadDir, { recursive: true })
@@ -137,6 +138,11 @@ class TorrentEngine {
     if (options.maxConcurrentDownloads && options.maxConcurrentDownloads > 0) {
       this.maxConcurrent = options.maxConcurrentDownloads
       if (this.serverPort) void this.rpc('changeGlobalOption', [{ 'max-concurrent-downloads': String(this.maxConcurrent) }]).catch((e) => logger.error('configure', 'max-concurrent failed: ' + getErrorMessage(e)))
+    }
+    // 限速全局生效（含正在下载的任务）：'0' 表示不限速
+    if (options.speedLimit !== undefined) {
+      this.speedLimit = options.speedLimit
+      if (this.serverPort) void this.rpc('changeGlobalOption', [{ 'max-overall-download-limit': options.speedLimit }]).catch((e) => logger.error('configure', 'speed-limit failed: ' + getErrorMessage(e)))
     }
   }
 
@@ -207,6 +213,7 @@ class TorrentEngine {
     if (process.env.ARIA2_DHT_ENTRY_POINT) args.push(`--dht-entry-point=${process.env.ARIA2_DHT_ENTRY_POINT}`)
     if (process.env.ARIA2_DHT_ENTRY_POINT6) args.push(`--dht-entry-point6=${process.env.ARIA2_DHT_ENTRY_POINT6}`)
     if (this.maxConcurrent) args.push(`--max-concurrent-downloads=${this.maxConcurrent}`)
+    if (this.speedLimit) args.push(`--max-overall-download-limit=${this.speedLimit}`)
     const child = spawn(binary, args, { windowsHide: true, env })
     this.process = child
     let startupError = ''

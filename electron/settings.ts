@@ -6,6 +6,7 @@ export interface AppSettings {
   downloadDir?: string
   trackers?: string
   maxConcurrentDownloads?: number
+  speedLimit?: string
 }
 
 const settingsFile = () => join(app.getPath('userData'), 'settings.json')

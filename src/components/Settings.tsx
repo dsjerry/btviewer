@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { ipc } from '../services/ipc'
 import pkg from '../../package.json'
 
-interface SettingsState { downloadDir: string; trackers: string; maxConcurrentDownloads: number; logDir: string }
+interface SettingsState { downloadDir: string; trackers: string; maxConcurrentDownloads: number; speedLimit: string; logDir: string }
 
 const REPO_URL = 'https://github.com/dsjerry/btviewer'
 
@@ -19,6 +19,7 @@ const Settings: React.FC = () => {
           downloadDir: result.data.downloadDir || '',
           trackers: result.data.trackers || '',
           maxConcurrentDownloads: result.data.maxConcurrentDownloads || 5,
+          speedLimit: result.data.speedLimit || '',
           logDir: result.data.logDir || ''
         })
       } else {
@@ -29,11 +30,13 @@ const Settings: React.FC = () => {
 
   const save = async () => {
     if (!state) return
+    const limit = state.speedLimit.trim() || '0'
+    if (limit !== '0' && !/^\d+(\.\d+)?[KMG]?$/i.test(limit)) { setNotice({ type: 'error', text: '限速格式无效，示例：10M、512K、0（不限速）' }); return }
     setSaving(true); setNotice(null)
     try {
-      const result = await ipc.saveSettings({ downloadDir: state.downloadDir, trackers: state.trackers, maxConcurrentDownloads: state.maxConcurrentDownloads })
+      const result = await ipc.saveSettings({ downloadDir: state.downloadDir, trackers: state.trackers, maxConcurrentDownloads: state.maxConcurrentDownloads, speedLimit: limit })
       if (result.success && result.data) {
-        setState({ downloadDir: result.data.downloadDir || '', trackers: result.data.trackers || '', maxConcurrentDownloads: result.data.maxConcurrentDownloads || 5, logDir: result.data.logDir || state.logDir })
+        setState({ downloadDir: result.data.downloadDir || '', trackers: result.data.trackers || '', maxConcurrentDownloads: result.data.maxConcurrentDownloads || 5, speedLimit: result.data.speedLimit || '', logDir: result.data.logDir || state.logDir })
         setNotice({ type: 'success', text: '设置已保存并对新任务生效' })
       } else {
         setNotice({ type: 'error', text: result.error || '保存失败' })
@@ -85,6 +88,13 @@ const Settings: React.FC = () => {
             <p>同时处于下载中的任务数量上限</p>
             <div className="settings-row">
               <input type="number" min={1} max={10} value={state.maxConcurrentDownloads} onChange={(event) => setState({ ...state, maxConcurrentDownloads: Number(event.target.value) })} />
+            </div>
+          </div>
+          <div className="settings-card">
+            <h3>下载限速</h3>
+            <p>全局总速度上限（含正在下载的任务）；0 或留空表示不限速</p>
+            <div className="settings-row">
+              <input type="text" value={state.speedLimit} onChange={(event) => setState({ ...state, speedLimit: event.target.value })} placeholder="例如 10M、512K；0 为不限速" />
             </div>
           </div>
           <div className="settings-actions">

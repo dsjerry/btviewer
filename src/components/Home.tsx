@@ -5,7 +5,7 @@ import type { TorrentFileInfo, TorrentStatus } from '../types'
 interface HomeProps {
   onTorrentAdded: (status?: TorrentStatus) => void
   onPlayFile: (status: TorrentStatus, file: TorrentFileInfo) => void
-  onDownload: (status: TorrentStatus) => void
+  onDownload: (status: TorrentStatus, filePaths?: string[]) => void
 }
 
 const typeIcons: Record<TorrentFileInfo['type'], string> = { video: '▶', audio: '♫', subtitle: 'A', other: '•' }
@@ -24,6 +24,16 @@ const Home: React.FC<HomeProps> = ({ onTorrentAdded, onPlayFile, onDownload }) =
   const [notice, setNotice] = useState<{ type: 'error' | 'success'; text: string } | null>(null)
   const [dragging, setDragging] = useState(false)
   const dragDepth = useRef(0)
+  const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set())
+  // 勾选状态按任务初始化：文件列表首次到达时默认勾选全部媒体与字幕
+  const selectionRef = useRef<{ hash: string; initialized: boolean }>({ hash: '', initialized: false })
+
+  useEffect(() => {
+    if (!parsedTask || !parsedTask.files.length) return
+    if (selectionRef.current.hash === parsedTask.infoHash && selectionRef.current.initialized) return
+    selectionRef.current = { hash: parsedTask.infoHash, initialized: true }
+    setSelectedFiles(new Set(parsedTask.files.filter((file) => file.type !== 'other').map((file) => file.path)))
+  }, [parsedTask])
 
   useEffect(() => {
     if (!parsedTask) return
@@ -72,6 +82,14 @@ const Home: React.FC<HomeProps> = ({ onTorrentAdded, onPlayFile, onDownload }) =
     } catch (error) { setNotice({ type: 'error', text: error instanceof Error ? error.message : '打开文件失败' }) } finally { setLoading(false) }
   }
 
+  const toggleFile = (path: string) => setSelectedFiles((current) => { const next = new Set(current); if (next.has(path)) next.delete(path); else next.add(path); return next })
+
+  const resetParse = () => {
+    setParsedTask(null)
+    selectionRef.current = { hash: '', initialized: false }
+    setSelectedFiles(new Set())
+  }
+
   // 拖放解析：优先取 .torrent 文件，其次取文本中的磁力链接
   const dropFiles = async (event: React.DragEvent) => {
     const transfer = event.dataTransfer
@@ -97,7 +115,7 @@ const Home: React.FC<HomeProps> = ({ onTorrentAdded, onPlayFile, onDownload }) =
       <div className="home-page" {...dragHandlers}>
         {dragging && <div className="drop-overlay"><strong>松开以解析资源</strong><small>支持 .torrent 文件与磁力链接</small></div>}
         <div className="result-panel">
-          <button className="back-link" onClick={() => setParsedTask(null)}>← 重新解析</button>
+          <button className="back-link" onClick={resetParse}>← 重新解析</button>
           <div className="result-heading">
             <span className="panel-icon">✓</span>
             <div>
@@ -108,19 +126,27 @@ const Home: React.FC<HomeProps> = ({ onTorrentAdded, onPlayFile, onDownload }) =
           </div>
           {parsedTask.files.length ? (
             <>
+              <div className="result-file-tools">
+                <span>已选 {selectedFiles.size} / {parsedTask.files.length}</span>
+                <button onClick={() => setSelectedFiles(new Set(parsedTask.files.map((file) => file.path)))}>全选</button>
+                <button onClick={() => setSelectedFiles(new Set())}>清空</button>
+                <small>仅勾选的文件会被下载</small>
+              </div>
               <div className="result-file-list">
                 {parsedTask.files.map((file) => (
-                  <div className="result-file" key={file.path}>
+                  <label className="result-file" key={file.path}>
+                    <input type="checkbox" checked={selectedFiles.has(file.path)} onChange={() => toggleFile(file.path)} />
                     <span className={`file-icon ${file.type}`}>{typeIcons[file.type]}</span>
                     <span title={file.name}>{file.name}</span>
                     <small>{size(file.size)}</small>
-                  </div>
+                  </label>
                 ))}
               </div>
               <div className="result-actions">
                 <button className="save-action" onClick={() => onTorrentAdded(parsedTask)}>保存到媒体库 <span>＋</span></button>
                 {playable.length > 0 && <button className="play-action" onClick={() => onPlayFile(parsedTask, playable[0])}>播放{playable.length > 1 ? '第一个媒体' : ''} <span>▶</span></button>}
-                <button className="download-action" onClick={() => onDownload(parsedTask)}>下载全部资源 <span>↓</span></button>
+                {playable.length === 0 && <span />}
+                <button className="download-action" disabled={!selectedFiles.size} onClick={() => onDownload(parsedTask, [...selectedFiles])}>{selectedFiles.size === parsedTask.files.length ? '下载全部资源' : `下载选中文件（${selectedFiles.size}）`} <span>↓</span></button>
               </div>
             </>
           ) : parsedTask.status === 'error' ? (

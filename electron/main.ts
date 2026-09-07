@@ -175,7 +175,7 @@ function setupIPC() {
   ipcMain.handle('settings:set', (_event, patch: Record<string, unknown>) => {
     const next = { ...loadSettings(), ...patch }
     saveSettings(next)
-    torrentEngine.configure({ downloadDir: next.downloadDir, trackers: next.trackers, maxConcurrentDownloads: next.maxConcurrentDownloads })
+    torrentEngine.configure({ downloadDir: next.downloadDir, trackers: next.trackers, maxConcurrentDownloads: next.maxConcurrentDownloads, speedLimit: next.speedLimit })
     return { success: true, data: { ...next, downloadDir: torrentEngine.effectiveDownloadDir(), logDir: logger.logDir() } }
   })
 
@@ -201,7 +201,7 @@ app.whenReady().then(async () => {
   Menu.setApplicationMenu(null)
   logger.cleanup()
   const settings = loadSettings()
-  torrentEngine.configure({ downloadDir: settings.downloadDir, trackers: settings.trackers, maxConcurrentDownloads: settings.maxConcurrentDownloads })
+  torrentEngine.configure({ downloadDir: settings.downloadDir, trackers: settings.trackers, maxConcurrentDownloads: settings.maxConcurrentDownloads, speedLimit: settings.speedLimit })
   setupIPC()
   try {
     const serverPort = await torrentEngine.startServer()
