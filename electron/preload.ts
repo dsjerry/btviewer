@@ -16,6 +16,8 @@ const electronAPI = {
   getSubtitleUrl: (infoHash: string, filePath: string) => ipcRenderer.invoke('torrent:get-subtitle-url', infoHash, filePath),
   getProgress: (infoHash: string, filePath: string) => ipcRenderer.invoke('progress:get', infoHash, filePath),
   setProgress: (infoHash: string, filePath: string, position: number, duration: number) => ipcRenderer.invoke('progress:set', infoHash, filePath, position, duration),
+  checkForUpdates: () => ipcRenderer.invoke('updater:check'),
+  installUpdate: () => ipcRenderer.invoke('updater:install'),
   getPathForFile: (file: File) => webUtils.getPathForFile(file),
   openFile: () => ipcRenderer.invoke('dialog:open-file'),
   pickDownloadDir: () => ipcRenderer.invoke('dialog:pick-download-dir'),
@@ -27,6 +29,11 @@ const electronAPI = {
     const listener = (_event: Electron.IpcRendererEvent, status: unknown) => callback(status)
     ipcRenderer.on('torrent:status-update', listener)
     return () => ipcRenderer.removeListener('torrent:status-update', listener)
+  },
+  onUpdaterEvent: (callback: (event: unknown) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => callback(payload)
+    ipcRenderer.on('updater:event', listener)
+    return () => ipcRenderer.removeListener('updater:event', listener)
   }
 }
 

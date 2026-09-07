@@ -3,6 +3,7 @@ import { join } from 'path'
 import { torrentEngine } from './torrent-engine'
 import { getProgress, setProgress } from './progress-store'
 import { loadSettings, saveSettings } from './settings'
+import { checkForUpdates, initUpdater, installUpdate } from './updater'
 import { logger } from './logger'
 import type { TorrentStatus } from '../src/types'
 
@@ -139,6 +140,15 @@ function setupIPC() {
     setProgress(infoHash, filePath, position, duration)
   })
 
+  ipcMain.handle('updater:check', async () => {
+    try { await checkForUpdates(); return { success: true } } catch (error) { return { success: false, error: getErrorMessage(error) } }
+  })
+
+  ipcMain.handle('updater:install', () => {
+    installUpdate()
+    return { success: true }
+  })
+
   ipcMain.handle('dialog:open-file', async () => {    if (!mainWindow || mainWindow.isDestroyed()) {
       return { success: false, error: '窗口尚未准备好' }
     }
@@ -210,6 +220,10 @@ app.whenReady().then(async () => {
     console.error('[Main] Failed to start torrent server:', getErrorMessage(error))
   }
   await createWindow()
+  // 启动自动更新（仅打包版生效）；事件推送给渲染层展示
+  initUpdater((event) => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('updater:event', event)
+  })
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) void createWindow()

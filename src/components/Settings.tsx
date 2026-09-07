@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { ipc } from '../services/ipc'
 import pkg from '../../package.json'
+import type { UpdaterEvent } from '../types'
 
 interface SettingsState { downloadDir: string; trackers: string; maxConcurrentDownloads: number; speedLimit: string; logDir: string }
 
@@ -10,6 +11,10 @@ const Settings: React.FC = () => {
   const [state, setState] = useState<SettingsState | null>(null)
   const [saving, setSaving] = useState(false)
   const [notice, setNotice] = useState<{ type: 'error' | 'success'; text: string } | null>(null)
+  const [checking, setChecking] = useState(false)
+  const [updateState, setUpdateState] = useState<UpdaterEvent | null>(null)
+
+  useEffect(() => { try { return ipc.onUpdaterEvent((event) => setUpdateState(event)) } catch { return () => undefined } }, [])
 
   useEffect(() => {
     void (async () => {
@@ -42,6 +47,26 @@ const Settings: React.FC = () => {
         setNotice({ type: 'error', text: result.error || '保存失败' })
       }
     } finally { setSaving(false) }
+  }
+
+  const checkNow = async () => {
+    setChecking(true); setNotice(null)
+    try {
+      const result = await ipc.checkForUpdates()
+      if (!result.success) { setNotice({ type: 'error', text: result.error || '检查更新失败' }); setUpdateState(null) }
+    } catch (error) { setNotice({ type: 'error', text: error instanceof Error ? error.message : '检查更新失败' }) } finally { setChecking(false) }
+  }
+
+  const updateStatusText = () => {
+    if (!updateState) return '启动时会自动检查并后台下载新版本'
+    switch (updateState.type) {
+      case 'checking': return '正在检查更新…'
+      case 'available': return `发现新版本 v${updateState.version}，正在后台下载…`
+      case 'progress': return `正在下载新版本… ${updateState.percent ?? 0}%`
+      case 'downloaded': return `新版本 v${updateState.version} 已就绪`
+      case 'error': return `检查失败：${updateState.message || '网络异常'}`
+      default: return '当前已是最新版本'
+    }
   }
 
   const pickDir = async () => {
@@ -95,6 +120,15 @@ const Settings: React.FC = () => {
             <p>全局总速度上限（含正在下载的任务）；0 或留空表示不限速</p>
             <div className="settings-row">
               <input type="text" value={state.speedLimit} onChange={(event) => setState({ ...state, speedLimit: event.target.value })} placeholder="例如 10M、512K；0 为不限速" />
+            </div>
+          </div>
+          <div className="settings-card">
+            <h3>版本更新 <small className="version-tag">v{pkg.version}</small></h3>
+            <p>{updateStatusText()}</p>
+            <div className="settings-row">
+              {updateState?.type === 'downloaded'
+                ? <button className="small-button" onClick={() => void ipc.installUpdate()}>重启更新</button>
+                : <button className="small-button" onClick={() => void checkNow()} disabled={checking || updateState?.type === 'checking'}>{checking ? '检查中…' : '检查更新'}</button>}
             </div>
           </div>
           <div className="settings-actions">

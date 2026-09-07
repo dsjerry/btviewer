@@ -2,6 +2,8 @@ export interface TorrentFileInfo {
   name: string
   path: string
   size: number
+  // 已下载字节数（任务进行中会随状态刷新增长），用于单文件进度展示
+  completed: number
   type: 'video' | 'audio' | 'subtitle' | 'other'
 }
 
@@ -36,6 +38,14 @@ export interface WatchProgress {
   position: number
   duration: number
   updatedAt: number
+}
+
+// 自动更新事件（electron-updater 事件转发到渲染层）
+export interface UpdaterEvent {
+  type: 'checking' | 'available' | 'not-available' | 'progress' | 'downloaded' | 'error'
+  version?: string
+  percent?: number
+  message?: string
 }
 
 export interface IPCResult<T = undefined> {

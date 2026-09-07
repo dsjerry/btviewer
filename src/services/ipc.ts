@@ -1,4 +1,4 @@
-import type { AppSettings, IPCResult, TorrentStatus, WatchProgress } from '../types'
+import type { AppSettings, IPCResult, TorrentStatus, UpdaterEvent, WatchProgress } from '../types'
 
 export interface ElectronAPI {
   minimizeWindow: () => Promise<{ success: boolean }>
@@ -14,6 +14,8 @@ export interface ElectronAPI {
   getSubtitleUrl: (infoHash: string, filePath: string) => Promise<string>
   getProgress: (infoHash: string, filePath: string) => Promise<WatchProgress | null>
   setProgress: (infoHash: string, filePath: string, position: number, duration: number) => Promise<void>
+  checkForUpdates: () => Promise<IPCResult>
+  installUpdate: () => Promise<IPCResult>
   getPathForFile: (file: File) => string
   openFile: () => Promise<IPCResult<TorrentStatus>>
   pickDownloadDir: () => Promise<IPCResult<string>>
@@ -22,6 +24,7 @@ export interface ElectronAPI {
   openPath: (path: string) => Promise<IPCResult>
   openExternal: (url: string) => Promise<IPCResult>
   onStatusUpdate: (callback: (status: TorrentStatus) => void) => () => void
+  onUpdaterEvent: (callback: (event: UpdaterEvent) => void) => () => void
 }
 
 declare global {
@@ -51,6 +54,8 @@ export const ipc: ElectronAPI = {
   getSubtitleUrl: (infoHash, filePath) => getElectronAPI().getSubtitleUrl(infoHash, filePath),
   getProgress: (infoHash, filePath) => getElectronAPI().getProgress(infoHash, filePath),
   setProgress: (infoHash, filePath, position, duration) => getElectronAPI().setProgress(infoHash, filePath, position, duration),
+  checkForUpdates: () => getElectronAPI().checkForUpdates(),
+  installUpdate: () => getElectronAPI().installUpdate(),
   getPathForFile: (file) => getElectronAPI().getPathForFile(file),
   openFile: () => getElectronAPI().openFile(),
   pickDownloadDir: () => getElectronAPI().pickDownloadDir(),
@@ -58,5 +63,6 @@ export const ipc: ElectronAPI = {
   saveSettings: (patch) => getElectronAPI().saveSettings(patch),
   openPath: (path) => getElectronAPI().openPath(path),
   openExternal: (url) => getElectronAPI().openExternal(url),
-  onStatusUpdate: (callback) => getElectronAPI().onStatusUpdate(callback)
+  onStatusUpdate: (callback) => getElectronAPI().onStatusUpdate(callback),
+  onUpdaterEvent: (callback) => getElectronAPI().onUpdaterEvent(callback)
 }

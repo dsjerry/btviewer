@@ -432,7 +432,7 @@ class TorrentEngine {
     const totalSize = toNumber(status.totalLength) || (status.files || []).reduce((sum, file) => sum + toNumber(file.length), 0)
     const downloaded = toNumber(status.completedLength)
     const downloadSpeed = toNumber(status.downloadSpeed)
-    const files = (status.files || []).map((file) => ({ name: relative(status.dir || this.dataDir, file.path) || basename(file.path), path: file.path, size: toNumber(file.length), type: getFileType(file.path) }))
+    const files = (status.files || []).map((file) => ({ name: relative(status.dir || this.dataDir, file.path) || basename(file.path), path: file.path, size: toNumber(file.length), completed: toNumber(file.completedLength), type: getFileType(file.path) }))
     const name = status.bittorrent?.info?.name || status.info || hash
     const state: TorrentStatus['status'] = status.status === 'error' ? 'error' : this.metadataGids.has(status.gid) ? 'parsing' : status.status === 'paused' ? 'paused' : status.status === 'complete' ? 'seeding' : status.status === 'active' ? 'downloading' : 'connecting'
     return { infoHash: hash, name, magnetURI: buildMagnetURI(hash, name, trackerList(this.trackerOverride).split(',')), progress: totalSize ? downloaded / totalSize : 0, downloadSpeed, uploadSpeed: toNumber(status.uploadSpeed), downloaded, totalSize, numPeers: toNumber(status.connections), timeRemaining: downloadSpeed > 0 ? Math.ceil(((totalSize - downloaded) / downloadSpeed) * 1000) : 0, status: state, error: state === 'error' ? status.errorMessage || '任务出错' : undefined, files }
