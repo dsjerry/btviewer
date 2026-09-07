@@ -1,8 +1,17 @@
 name: Release
 
 on:
-  push:
-    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号（示例：v1.2.3 或 1.2.3）'
+        required: true
+        type: string
+      prerelease:
+        description: '标记为预发布版本'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -24,8 +33,55 @@ jobs:
         with:
           node-version: 20
           cache: npm
+      - name: 设置版本号
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          VERSION="${RELEASE_VERSION#v}"
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)*$ ]]; then
+            echo "无效的版本号：$RELEASE_VERSION（示例：v1.2.3 或 1.2.3）"
+            exit 1
+          fi
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
       - run: npm ci
       - run: npm run build
-      - run: npx electron-builder ${{ matrix.args }} --publish always
+      - name: 打包（产物稍后统一发布到 Release）
+        run: npx electron-builder ${{ matrix.args }} --publish never
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.os }}
+          if-no-files-found: error
+          path: |
+            release/*.exe
+            release/*.exe.blockmap
+            release/*.AppImage
+            release/*.zip
+            release/*.dmg
+            release/latest*.yml
+
+  release:
+    needs: package
+    runs-on: ubuntu-latest
+    steps:
+      - name: 规范化版本号
+        id: version
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          TAG="${RELEASE_VERSION#v}"
+          echo "tag=v${TAG}" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: 创建 GitHub Release 并附加产物
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: ${{ steps.version.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          prerelease: ${{ inputs.prerelease }}
+          generate_release_notes: true
+          files: artifacts/**/*
+          fail_on_unmatched_files: true
