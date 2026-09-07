@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { ipc } from '../services/ipc'
 import type { TorrentFileInfo, TorrentStatus } from '../types'
 
@@ -22,6 +22,8 @@ const Home: React.FC<HomeProps> = ({ onTorrentAdded, onPlayFile, onDownload }) =
   const [loading, setLoading] = useState(false)
   const [parsedTask, setParsedTask] = useState<TorrentStatus | null>(null)
   const [notice, setNotice] = useState<{ type: 'error' | 'success'; text: string } | null>(null)
+  const [dragging, setDragging] = useState(false)
+  const dragDepth = useRef(0)
 
   useEffect(() => {
     if (!parsedTask) return
@@ -30,8 +32,7 @@ const Home: React.FC<HomeProps> = ({ onTorrentAdded, onPlayFile, onDownload }) =
     })
   }, [parsedTask?.infoHash])
 
-  const addMagnet = async () => {
-    const value = magnetUri.trim()
+  const parseMagnet = async (value: string) => {
     if (!value.startsWith('magnet:?')) { setNotice({ type: 'error', text: '请输入以 magnet:? 开头的有效磁力链接' }); return }
     setLoading(true); setNotice(null)
     try {
@@ -39,6 +40,27 @@ const Home: React.FC<HomeProps> = ({ onTorrentAdded, onPlayFile, onDownload }) =
       if (!result.success || !result.data) { setNotice({ type: 'error', text: result.error || '解析任务失败' }); return }
       setMagnetUri(''); setParsedTask(result.data); setNotice(null)
     } catch (error) { setNotice({ type: 'error', text: error instanceof Error ? error.message : '解析磁力链接失败' }) } finally { setLoading(false) }
+  }
+
+  const addMagnet = () => void parseMagnet(magnetUri.trim())
+
+  const parseTorrentFile = async (path: string) => {
+    setLoading(true); setNotice(null)
+    try {
+      const result = await ipc.addTorrent(path)
+      if (result.success && result.data) setParsedTask(result.data)
+      else setNotice({ type: 'error', text: result.error || '解析文件失败' })
+    } catch (error) { setNotice({ type: 'error', text: error instanceof Error ? error.message : '解析文件失败' }) } finally { setLoading(false) }
+  }
+
+  // 剪贴板解析：读到磁力链接后自动填入并解析
+  const pasteMagnet = async () => {
+    try {
+      const text = (await navigator.clipboard.readText()).trim()
+      if (!text.startsWith('magnet:?')) { setNotice({ type: 'error', text: '剪贴板内容不是磁力链接' }); return }
+      setMagnetUri(text)
+      await parseMagnet(text)
+    } catch (error) { setNotice({ type: 'error', text: error instanceof Error ? error.message : '读取剪贴板失败' }) }
   }
 
   const openFile = async () => {
@@ -50,10 +72,30 @@ const Home: React.FC<HomeProps> = ({ onTorrentAdded, onPlayFile, onDownload }) =
     } catch (error) { setNotice({ type: 'error', text: error instanceof Error ? error.message : '打开文件失败' }) } finally { setLoading(false) }
   }
 
+  // 拖放解析：优先取 .torrent 文件，其次取文本中的磁力链接
+  const dropFiles = async (event: React.DragEvent) => {
+    const transfer = event.dataTransfer
+    const torrent = Array.from(transfer.files).find((item) => item.name.toLowerCase().endsWith('.torrent'))
+    if (torrent) { await parseTorrentFile(ipc.getPathForFile(torrent)); return }
+    const text = transfer.getData('text/uri-list') || transfer.getData('text/plain')
+    const magnet = text.split(/\s+/).find((item) => item.startsWith('magnet:?'))
+    if (magnet) { setMagnetUri(magnet); await parseMagnet(magnet); return }
+    setNotice({ type: 'error', text: '请拖入 .torrent 文件或磁力链接' })
+  }
+
+  // 用计数器处理嵌套元素的 dragenter/dragleave，避免子元素误触发遮罩闪烁
+  const dragHandlers = {
+    onDragEnter: (event: React.DragEvent) => { event.preventDefault(); dragDepth.current += 1; setDragging(true) },
+    onDragOver: (event: React.DragEvent) => event.preventDefault(),
+    onDragLeave: () => { dragDepth.current = Math.max(0, dragDepth.current - 1); if (!dragDepth.current) setDragging(false) },
+    onDrop: (event: React.DragEvent) => { event.preventDefault(); dragDepth.current = 0; setDragging(false); void dropFiles(event) }
+  }
+
   if (parsedTask) {
     const playable = parsedTask.files.filter((file) => file.type === 'video' || file.type === 'audio')
     return (
-      <div className="home-page">
+      <div className="home-page" {...dragHandlers}>
+        {dragging && <div className="drop-overlay"><strong>松开以解析资源</strong><small>支持 .torrent 文件与磁力链接</small></div>}
         <div className="result-panel">
           <button className="back-link" onClick={() => setParsedTask(null)}>← 重新解析</button>
           <div className="result-heading">
@@ -100,14 +142,18 @@ const Home: React.FC<HomeProps> = ({ onTorrentAdded, onPlayFile, onDownload }) =
   }
 
   return (
-    <div className="home-page">
+    <div className="home-page" {...dragHandlers}>
+      {dragging && <div className="drop-overlay"><strong>松开以解析资源</strong><small>支持 .torrent 文件与磁力链接</small></div>}
       <div className="add-panel">
         <div className="panel-kicker"><span className="panel-icon">+</span><div><strong>添加媒体源</strong><small>解析后选择下一步操作</small></div></div>
         <label htmlFor="magnet">MAGNET LINK</label>
         <textarea id="magnet" value={magnetUri} onChange={(event) => setMagnetUri(event.target.value)} placeholder="magnet:?xt=urn:btih:..." rows={4} disabled={loading} />
-        <button className="primary-action" onClick={() => void addMagnet()} disabled={loading}>{loading ? <span className="button-loader" /> : '解析链接'}<span>→</span></button>
+        <button className="primary-action" onClick={addMagnet} disabled={loading}>{loading ? <span className="button-loader" /> : '解析链接'}<span>→</span></button>
         <div className="or-divider"><span>或者</span></div>
-        <button className="secondary-action" onClick={() => void openFile()} disabled={loading}><span>⌁</span> 解析 .torrent 文件</button>
+        <div className="alt-actions">
+          <button className="secondary-action" onClick={() => void pasteMagnet()} disabled={loading}><span>⎘</span> 从剪贴板解析磁力</button>
+          <button className="secondary-action" onClick={() => void openFile()} disabled={loading}><span>⌁</span> 解析 .torrent 文件</button>
+        </div>
         {notice && <div className={`inline-notice ${notice.type}`}>{notice.type === 'error' ? '!' : '✓'} {notice.text}</div>}
         <div className="privacy-note"><span>◉</span> 解析只在本机进行，不会上传你的文件</div>
       </div>

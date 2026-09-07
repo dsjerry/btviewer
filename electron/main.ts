@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, dialog, Menu, shell } from 'electron'
 import { join } from 'path'
 import { torrentEngine } from './torrent-engine'
+import { getProgress, setProgress } from './progress-store'
 import { loadSettings, saveSettings } from './settings'
 import { logger } from './logger'
 import type { TorrentStatus } from '../src/types'
@@ -124,6 +125,18 @@ function setupIPC() {
 
   ipcMain.handle('torrent:get-stream-url', async (_event, infoHash: string, filePath: string) => {
     return torrentEngine.getStreamUrl(infoHash, filePath)
+  })
+
+  ipcMain.handle('torrent:get-subtitle-url', (_event, infoHash: string, filePath: string) => {
+    return torrentEngine.getSubtitleUrl(infoHash, filePath)
+  })
+
+  ipcMain.handle('progress:get', (_event, infoHash: string, filePath: string) => {
+    return getProgress(infoHash, filePath)
+  })
+
+  ipcMain.handle('progress:set', (_event, infoHash: string, filePath: string, position: number, duration: number) => {
+    setProgress(infoHash, filePath, position, duration)
   })
 
   ipcMain.handle('dialog:open-file', async () => {    if (!mainWindow || mainWindow.isDestroyed()) {

@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { getFileType, infoHashFromMagnet, isUnderRoot, torrentInfoHash, trackerList } from '../electron/torrent-engine'
+import { buildMagnetURI, getFileType, infoHashFromMagnet, isUnderRoot, srtToVtt, torrentInfoHash, trackerList } from '../electron/torrent-engine'
 
 // 引擎模块引入了 electron，但被测的纯逻辑函数不会触达它
 vi.mock('electron', () => ({}))
@@ -76,5 +76,35 @@ describe('getFileType', () => {
     expect(getFileType('b.FLAC')).toBe('audio')
     expect(getFileType('c.srt')).toBe('subtitle')
     expect(getFileType('d.jpg')).toBe('other')
+  })
+})
+
+describe('srtToVtt', () => {
+  it('prepends the WEBVTT header and converts SRT timestamp commas', () => {
+    const srt = '1\n00:00:01,000 --> 00:00:03,500\n你好\n\n2\n00:01:02,250 --> 00:01:04,000\nWorld\n'
+    expect(srtToVtt(srt)).toBe('WEBVTT\n\n1\n00:00:01.000 --> 00:00:03.500\n你好\n\n2\n00:01:02.250 --> 00:01:04.000\nWorld\n')
+  })
+  it('keeps VTT content untouched', () => {
+    const vtt = 'WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nhi'
+    expect(srtToVtt(vtt)).toBe(vtt)
+  })
+  it('strips a UTF-8 BOM and keeps comma-free timestamps intact', () => {
+    const srt = '\uFEFF00:00:05,200 --> 00:00:06,700\ntext'
+    expect(srtToVtt(srt).startsWith('WEBVTT\n\n00:00:05.200')).toBe(true)
+  })
+})
+
+describe('buildMagnetURI', () => {
+  it('builds a magnet with display name and trackers', () => {
+    const magnet = buildMagnetURI('08ada5a7a6183aae1e09d831df6748d566095a10', 'Sintel', ['udp://tracker.opentrackr.org:1337/announce'])
+    expect(magnet).toBe('magnet:?xt=urn:btih:08ada5a7a6183aae1e09d831df6748d566095a10&dn=Sintel&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce')
+  })
+  it('omits the display name when empty', () => {
+    expect(buildMagnetURI('2dd9de911e0aeadce51c9a6d6df96b21c0524458', '')).toBe('magnet:?xt=urn:btih:2dd9de911e0aeadce51c9a6d6df96b21c0524458')
+  })
+  it('accepts base32 magnet hashes and rejects placeholder gids', () => {
+    expect(buildMagnetURI('ABCDEFGHIJKLMNOPQRSTUVWXYZ234567', 'x').startsWith('magnet:?xt=urn:btih:ABCDEFGHIJKLMNOPQRSTUVWXYZ234567')).toBe(true)
+    expect(buildMagnetURI('gid-123', 'x')).toBe('')
+    expect(buildMagnetURI('', 'x')).toBe('')
   })
 })

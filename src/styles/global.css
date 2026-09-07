@@ -41,4 +41,18 @@
 .about-meta a{color:#d8f36a;cursor:pointer;text-decoration:underline;text-underline-offset:3px}
 .about-meta a:hover{color:#e7ff87}
 .about-tech{margin-top:12px;color:#5d5f55;font:11px 'DM Mono',monospace}
+/* 播放器：字幕选择器（头部右侧） */
+.subtitle-picker{display:flex;align-items:center;gap:8px;margin-left:auto;color:#838579;font:11px 'DM Mono',monospace}
+.subtitle-picker select{padding:7px 10px;max-width:260px;color:#ecebdc;background:#11110f;border:1px solid #46483a;border-radius:4px;outline:none;cursor:pointer}
+.subtitle-picker select:hover{border-color:#d8f36a}
+/* 播放器：续播提示 */
+.resume-toast{position:absolute;top:18px;left:50%;transform:translateX(-50%);padding:9px 16px;color:#c9f887;background:rgba(37,50,27,.92);border:1px solid #59683b;border-radius:4px;font-size:13px;pointer-events:none;z-index:2}
+/* 首页：拖放遮罩 */
+.home-page{position:relative}
+.drop-overlay{position:absolute;inset:0;z-index:3;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:9px;background:rgba(17,17,15,.86);border:2px dashed #d8f36a;color:#d8f36a;pointer-events:none}
+.drop-overlay strong{font-size:20px}
+.drop-overlay small{color:#8f9086}
+/* 首页：剪贴板 / torrent 两个次要操作并排 */
+.alt-actions{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.alt-actions .secondary-action{margin-top:0}
 .about-disclaimer{margin-top:12px;padding-top:10px;border-top:1px solid #303229;color:#6c6d63;font-size:11px;line-height:1.6}

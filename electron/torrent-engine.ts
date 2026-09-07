@@ -10,6 +10,8 @@ import type { TorrentFileInfo, TorrentStatus } from '../src/types'
 const VIDEO_EXTENSIONS = ['.mp4', '.mkv', '.avi', '.mov', '.webm', '.flv', '.wmv', '.m4v', '.ts', '.rmvb']
 const AUDIO_EXTENSIONS = ['.mp3', '.flac', '.wav', '.aac', '.ogg', '.m4a', '.wma']
 const SUBTITLE_EXTENSIONS = ['.srt', '.ass', '.ssa', '.vtt', '.sub']
+// Chromium 原生只渲染 VTT：vtt 直接可用，srt 可本地无损转换；ass/ssa/sub 需要特效渲染库，暂不支持
+const ATTACHABLE_SUBTITLES = ['.srt', '.vtt']
 const RPC_VERSION = 'aria2'
 // 内置公共 tracker 快照（来源 ngosang/trackerslist best，2026-09），裸磁力链只能靠 DHT 找节点，
 // 部分网络会屏蔽 DHT 而 tracker 可用，注入后可大幅提高解析成功率；ARIA2_TRACKERS 可整体覆盖
@@ -42,6 +44,20 @@ function getErrorMessage(error: unknown) { return error instanceof Error ? error
 function isUnderRoot(root: string, path: string) { const rel = relative(resolve(root), resolve(path)); return !!rel && !rel.startsWith('..') && !isAbsolute(rel) }
 function toNumber(value: string | undefined) { return Number(value || 0) || 0 }
 function infoHashFromMagnet(value: string) { return value.match(/[?&]xt=urn:btih:([a-z\d]{32,40})/i)?.[1]?.toLowerCase() || '' }
+// SRT 转 WebVTT：补 WEBVTT 头并把时间戳的毫秒分隔逗号改为点；本身已是 VTT 的内容原样返回
+function srtToVtt(content: string) {
+  const text = content.replace(/^\uFEFF/, '')
+  if (/^\s*WEBVTT/.test(text)) return text
+  return `WEBVTT\n\n${text.replace(/(\d{1,2}:\d{2}:\d{2})\s*,\s*(\d{1,3})/g, '$1.$2').trim()}\n`
+}
+// 由 infoHash 构造可分享的磁力链接（含名称与 tracker）；hash 尚未就绪（仍是 gid）时返回空串
+function buildMagnetURI(hash: string, name: string, trackers: string[] = []) {
+  if (!/^[a-z\d]{32,40}$/i.test(hash)) return ''
+  const params = [`xt=urn:btih:${hash}`]
+  if (name) params.push(`dn=${encodeURIComponent(name)}`)
+  for (const tracker of trackers) params.push(`tr=${encodeURIComponent(tracker)}`)
+  return `magnet:?${params.join('&')}`
+}
 function executablePath() {
   const name = process.platform === 'win32' ? 'aria2c.exe' : 'aria2c'
   const bundled = app.isPackaged ? join(process.resourcesPath, 'aria2', name) : join(app.getAppPath(), 'resources', 'aria2', name)
@@ -347,6 +363,16 @@ class TorrentEngine {
   getAllStatuses() { return [...this.statuses.entries()].map(([hash, status]) => this.toTorrentStatus(hash, status)) }
   getStreamUrl(infoHash: string, filePath: string) { const hash = infoHash.toLowerCase(); const status = this.statuses.get(hash); const fileIndex = status?.files?.find((file) => file.path === filePath || basename(file.path) === filePath)?.index; if (!status || !fileIndex) throw new Error('媒体文件尚未准备完成'); return `http://127.0.0.1:${this.serverPort}/stream/${encodeURIComponent(hash)}/${fileIndex}?token=${this.streamToken}` }
 
+  // 返回可挂载到 <track> 的字幕 URL：仅支持 .srt/.vtt，主进程会实时把 srt 转成 vtt
+  getSubtitleUrl(infoHash: string, filePath: string) {
+    const hash = infoHash.toLowerCase()
+    const status = this.statuses.get(hash)
+    const file = status?.files?.find((item) => item.path === filePath || basename(item.path) === filePath)
+    const ext = file ? file.path.toLowerCase().slice(file.path.lastIndexOf('.')) : ''
+    if (!status || !file || !ATTACHABLE_SUBTITLES.includes(ext)) throw new Error('字幕文件不存在或格式不支持')
+    return `http://127.0.0.1:${this.serverPort}/subtitle/${encodeURIComponent(hash)}/${file.index}?token=${this.streamToken}`
+  }
+
   private async refreshStatuses() {
     if (this.refreshing) return
     this.refreshing = true
@@ -400,8 +426,9 @@ class TorrentEngine {
     const downloaded = toNumber(status.completedLength)
     const downloadSpeed = toNumber(status.downloadSpeed)
     const files = (status.files || []).map((file) => ({ name: relative(status.dir || this.dataDir, file.path) || basename(file.path), path: file.path, size: toNumber(file.length), type: getFileType(file.path) }))
+    const name = status.bittorrent?.info?.name || status.info || hash
     const state: TorrentStatus['status'] = status.status === 'error' ? 'error' : this.metadataGids.has(status.gid) ? 'parsing' : status.status === 'paused' ? 'paused' : status.status === 'complete' ? 'seeding' : status.status === 'active' ? 'downloading' : 'connecting'
-    return { infoHash: hash, name: status.bittorrent?.info?.name || status.info || hash, magnetURI: '', progress: totalSize ? downloaded / totalSize : 0, downloadSpeed, uploadSpeed: toNumber(status.uploadSpeed), downloaded, totalSize, numPeers: toNumber(status.connections), timeRemaining: downloadSpeed > 0 ? Math.ceil(((totalSize - downloaded) / downloadSpeed) * 1000) : 0, status: state, error: state === 'error' ? status.errorMessage || '任务出错' : undefined, files }
+    return { infoHash: hash, name, magnetURI: buildMagnetURI(hash, name, trackerList(this.trackerOverride).split(',')), progress: totalSize ? downloaded / totalSize : 0, downloadSpeed, uploadSpeed: toNumber(status.uploadSpeed), downloaded, totalSize, numPeers: toNumber(status.connections), timeRemaining: downloadSpeed > 0 ? Math.ceil(((totalSize - downloaded) / downloadSpeed) * 1000) : 0, status: state, error: state === 'error' ? status.errorMessage || '任务出错' : undefined, files }
   }
 
   private handleStream(request: IncomingMessage, response: ServerResponse) {
@@ -414,6 +441,22 @@ class TorrentEngine {
     const cors = { 'access-control-allow-origin': '*' }
     const match = url.pathname.match(/^\/stream\/([^/]+)\/(\d+)$/)
     if (!match) { response.writeHead(404, cors); response.end(); return }
+    // 字幕路由：srt 在内存中转成 vtt 后整体返回（字幕文件都很小，无需 Range）
+    const subtitleMatch = url.pathname.match(/^\/subtitle\/([^/]+)\/(\d+)$/)
+    if (subtitleMatch) {
+      const hash = decodeURIComponent(subtitleMatch[1])
+      const status = this.statuses.get(hash)
+      const file = status?.files?.find((item) => item.index === subtitleMatch[2])
+      const ext = file ? file.path.toLowerCase().slice(file.path.lastIndexOf('.')) : ''
+      if (!file || !ATTACHABLE_SUBTITLES.includes(ext)) { response.writeHead(404, cors); response.end('Subtitle not found'); return }
+      const path = resolve(file.path)
+      if (!isUnderRoot(resolve(status!.dir || this.dataDir), path)) { response.writeHead(403, cors); response.end(); return }
+      let body: Buffer
+      try { body = Buffer.from(srtToVtt(readFileSync(path, 'utf8')), 'utf8') } catch { response.writeHead(404, cors); response.end('File not ready'); return }
+      response.writeHead(200, { ...cors, 'content-type': 'text/vtt; charset=utf-8', 'content-length': body.length, 'cache-control': 'no-store' })
+      response.end(body)
+      return
+    }
     const hash = decodeURIComponent(match[1])
     const status = this.statuses.get(hash)
     if (!status) { response.writeHead(404, cors); response.end('Task not found'); return }
@@ -464,4 +507,4 @@ class TorrentEngine {
 }
 function getMime(filename: string) { const ext = filename.toLowerCase().slice(filename.lastIndexOf('.')); return ({ '.mp4': 'video/mp4', '.webm': 'video/webm', '.mkv': 'video/x-matroska', '.mp3': 'audio/mpeg', '.flac': 'audio/flac', '.wav': 'audio/wav', '.ogg': 'audio/ogg' } as Record<string, string>)[ext] || 'application/octet-stream' }
 export const torrentEngine = new TorrentEngine()
-export { getFileType, isUnderRoot, infoHashFromMagnet, torrentInfoHash, trackerList }
+export { buildMagnetURI, getFileType, infoHashFromMagnet, isUnderRoot, srtToVtt, torrentInfoHash, trackerList }

@@ -30,6 +30,13 @@ export interface AppSettings {
   logDir?: string
 }
 
+// 单个媒体文件的观看进度，用于续播
+export interface WatchProgress {
+  position: number
+  duration: number
+  updatedAt: number
+}
+
 export interface IPCResult<T = undefined> {
   success: boolean
   data?: T

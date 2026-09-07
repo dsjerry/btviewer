@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 
 type StatusListener = (status: unknown) => void
 
@@ -13,6 +13,10 @@ const electronAPI = {
   downloadTorrent: (infoHash: string, filePaths?: string[]) => ipcRenderer.invoke('torrent:download', infoHash, filePaths),
   getAllStatuses: () => ipcRenderer.invoke('torrent:all-status'),
   getStreamUrl: (infoHash: string, filePath: string) => ipcRenderer.invoke('torrent:get-stream-url', infoHash, filePath),
+  getSubtitleUrl: (infoHash: string, filePath: string) => ipcRenderer.invoke('torrent:get-subtitle-url', infoHash, filePath),
+  getProgress: (infoHash: string, filePath: string) => ipcRenderer.invoke('progress:get', infoHash, filePath),
+  setProgress: (infoHash: string, filePath: string, position: number, duration: number) => ipcRenderer.invoke('progress:set', infoHash, filePath, position, duration),
+  getPathForFile: (file: File) => webUtils.getPathForFile(file),
   openFile: () => ipcRenderer.invoke('dialog:open-file'),
   pickDownloadDir: () => ipcRenderer.invoke('dialog:pick-download-dir'),
   getSettings: () => ipcRenderer.invoke('settings:get'),

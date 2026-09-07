@@ -1,4 +1,4 @@
-import type { AppSettings, IPCResult, TorrentStatus } from '../types'
+import type { AppSettings, IPCResult, TorrentStatus, WatchProgress } from '../types'
 
 export interface ElectronAPI {
   minimizeWindow: () => Promise<{ success: boolean }>
@@ -11,6 +11,10 @@ export interface ElectronAPI {
   downloadTorrent: (infoHash: string, filePaths?: string[]) => Promise<IPCResult>
   getAllStatuses: () => Promise<TorrentStatus[]>
   getStreamUrl: (infoHash: string, filePath: string) => Promise<string>
+  getSubtitleUrl: (infoHash: string, filePath: string) => Promise<string>
+  getProgress: (infoHash: string, filePath: string) => Promise<WatchProgress | null>
+  setProgress: (infoHash: string, filePath: string, position: number, duration: number) => Promise<void>
+  getPathForFile: (file: File) => string
   openFile: () => Promise<IPCResult<TorrentStatus>>
   pickDownloadDir: () => Promise<IPCResult<string>>
   getSettings: () => Promise<IPCResult<AppSettings>>
@@ -44,6 +48,10 @@ export const ipc: ElectronAPI = {
   downloadTorrent: (infoHash, filePaths) => getElectronAPI().downloadTorrent(infoHash, filePaths),
   getAllStatuses: () => getElectronAPI().getAllStatuses(),
   getStreamUrl: (infoHash, filePath) => getElectronAPI().getStreamUrl(infoHash, filePath),
+  getSubtitleUrl: (infoHash, filePath) => getElectronAPI().getSubtitleUrl(infoHash, filePath),
+  getProgress: (infoHash, filePath) => getElectronAPI().getProgress(infoHash, filePath),
+  setProgress: (infoHash, filePath, position, duration) => getElectronAPI().setProgress(infoHash, filePath, position, duration),
+  getPathForFile: (file) => getElectronAPI().getPathForFile(file),
   openFile: () => getElectronAPI().openFile(),
   pickDownloadDir: () => getElectronAPI().pickDownloadDir(),
   getSettings: () => getElectronAPI().getSettings(),
