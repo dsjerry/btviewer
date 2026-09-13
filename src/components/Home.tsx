@@ -119,7 +119,7 @@ const Home: React.FC<HomeProps> = ({ onTorrentAdded, onPlayFile, onDownload }) =
           <div className="result-heading">
             <span className="panel-icon">✓</span>
             <div>
-              <span className="eyebrow">PARSED SUCCESSFULLY</span>
+              <span className="eyebrow">解析成功</span>
               <h2>{parsedTask.name}</h2>
               <p>{parsedTask.files.length ? `已解析出 ${parsedTask.files.length} 个文件 · 共 ${size(parsedTask.totalSize)}` : '正在等待节点返回文件信息…'}</p>
             </div>

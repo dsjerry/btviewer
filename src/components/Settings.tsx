@@ -1,18 +1,42 @@
 import React, { useEffect, useState } from 'react'
 import { ipc } from '../services/ipc'
 import pkg from '../../package.json'
-import type { UpdaterEvent } from '../types'
+import type { ThemeMode, UpdaterEvent } from '../types'
 
-interface SettingsState { downloadDir: string; trackers: string; maxConcurrentDownloads: number; speedLimit: string; logDir: string }
+interface SettingsState { downloadDir: string; trackers: string; maxConcurrentDownloads: number; speedLimit: string; logDir: string; closeToTray?: boolean; launchOnStartup?: boolean; notifyOnComplete?: boolean }
 
 const REPO_URL = 'https://github.com/dsjerry/btviewer'
 
-const Settings: React.FC = () => {
+const THEME_OPTIONS: Array<{ value: ThemeMode; label: string; icon: string }> = [
+  { value: 'light', label: '亮色', icon: '☀' },
+  { value: 'dark', label: '暗色', icon: '☾' },
+  { value: 'system', label: '跟随系统', icon: '◐' }
+]
+
+// 即时校验：返回错误文案，空串表示通过
+const SPEED_LIMIT_RE = /^\d+(\.\d+)?[KMG]?$/i
+function validateSpeedLimit(value: string): string {
+  const limit = value.trim()
+  if (!limit || limit === '0') return ''
+  return SPEED_LIMIT_RE.test(limit) ? '' : '限速格式无效，示例：10M、512K、0（不限速）'
+}
+function validateTrackers(value: string): string {
+  const list = value.split(/[\s,]+/).filter(Boolean)
+  if (!list.length) return ''
+  const invalid = list.find((item) => !/^(udp|https?|wss?):\/\//i.test(item))
+  return invalid ? `无效 tracker（需以 udp://、http(s):// 或 ws(s):// 开头）：${invalid.slice(0, 60)}` : ''
+}
+
+const Settings: React.FC<{ theme: ThemeMode; onThemeChange: (mode: ThemeMode) => void }> = ({ theme, onThemeChange }) => {
   const [state, setState] = useState<SettingsState | null>(null)
   const [saving, setSaving] = useState(false)
   const [notice, setNotice] = useState<{ type: 'error' | 'success'; text: string } | null>(null)
   const [checking, setChecking] = useState(false)
   const [updateState, setUpdateState] = useState<UpdaterEvent | null>(null)
+  // 输入即校验；有错误时禁用保存
+  const speedLimitError = state ? validateSpeedLimit(state.speedLimit) : ''
+  const trackersError = state ? validateTrackers(state.trackers) : ''
+  const hasValidationError = !!speedLimitError || !!trackersError
 
   useEffect(() => { try { return ipc.onUpdaterEvent((event) => setUpdateState(event)) } catch { return () => undefined } }, [])
 
@@ -25,7 +49,10 @@ const Settings: React.FC = () => {
           trackers: result.data.trackers || '',
           maxConcurrentDownloads: result.data.maxConcurrentDownloads || 5,
           speedLimit: result.data.speedLimit || '',
-          logDir: result.data.logDir || ''
+          logDir: result.data.logDir || '',
+          closeToTray: result.data.closeToTray,
+          launchOnStartup: result.data.launchOnStartup,
+          notifyOnComplete: result.data.notifyOnComplete
         })
       } else {
         setNotice({ type: 'error', text: result.error || '读取设置失败' })
@@ -34,9 +61,8 @@ const Settings: React.FC = () => {
   }, [])
 
   const save = async () => {
-    if (!state) return
+    if (!state || hasValidationError) return
     const limit = state.speedLimit.trim() || '0'
-    if (limit !== '0' && !/^\d+(\.\d+)?[KMG]?$/i.test(limit)) { setNotice({ type: 'error', text: '限速格式无效，示例：10M、512K、0（不限速）' }); return }
     setSaving(true); setNotice(null)
     try {
       const result = await ipc.saveSettings({ downloadDir: state.downloadDir, trackers: state.trackers, maxConcurrentDownloads: state.maxConcurrentDownloads, speedLimit: limit })
@@ -47,6 +73,15 @@ const Settings: React.FC = () => {
         setNotice({ type: 'error', text: result.error || '保存失败' })
       }
     } finally { setSaving(false) }
+  }
+
+  // 托盘/自启这类开关立即生效，不等"保存设置"
+  const saveOption = async (patch: { closeToTray?: boolean; launchOnStartup?: boolean; notifyOnComplete?: boolean }) => {
+    try {
+      const result = await ipc.saveSettings(patch)
+      if (result.success && result.data) setState((prev) => prev ? { ...prev, closeToTray: result.data?.closeToTray, launchOnStartup: result.data?.launchOnStartup, notifyOnComplete: result.data?.notifyOnComplete } : prev)
+      else setNotice({ type: 'error', text: result.error || '保存失败' })
+    } catch (error) { setNotice({ type: 'error', text: error instanceof Error ? error.message : '保存失败' }) }
   }
 
   const checkNow = async () => {
@@ -88,12 +123,24 @@ const Settings: React.FC = () => {
   return (
     <div className="page-content">
       <div className="page-heading">
-        <div><span className="eyebrow">SETTINGS</span><h2>设置</h2><p>配置立即保存，对新任务生效；已存在的任务不受影响</p></div>
+        <div><span className="eyebrow">系统设置</span><h2>设置</h2><p>配置立即保存，对新任务生效；已存在的任务不受影响</p></div>
       </div>
       {!state ? (
         <div className="empty-state"><span>⚙</span><strong>{notice ? notice.text : '正在读取设置…'}</strong></div>
       ) : (
         <>
+          <div className="settings-card">
+            <h3>外观主题</h3>
+            <p>切换立即生效；跟随系统时随操作系统的亮暗偏好自动切换</p>
+            <div className="theme-options" role="radiogroup" aria-label="外观主题">
+              {THEME_OPTIONS.map((option) => (
+                <button key={option.value} className={`theme-option ${theme === option.value ? 'is-active' : ''}`} role="radio" aria-checked={theme === option.value} onClick={() => onThemeChange(option.value)}>
+                  <span className="theme-option-icon">{option.icon}</span>
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
           <div className="settings-card">
             <h3>下载目录</h3>
             <p>新任务的保存位置；已存在任务仍使用创建时的目录</p>
@@ -104,9 +151,17 @@ const Settings: React.FC = () => {
             </div>
           </div>
           <div className="settings-card">
+            <h3>窗口行为</h3>
+            <p>开关立即生效；最小化到托盘后任务继续后台下载</p>
+            <label className="settings-check"><input type="checkbox" checked={state.closeToTray !== false} onChange={(event) => void saveOption({ closeToTray: event.target.checked })} />关闭窗口时最小化到托盘</label>
+            <label className="settings-check"><input type="checkbox" checked={!!state.launchOnStartup} onChange={(event) => void saveOption({ launchOnStartup: event.target.checked })} />开机自动启动（静默启动到托盘）</label>
+            <label className="settings-check"><input type="checkbox" checked={state.notifyOnComplete !== false} onChange={(event) => void saveOption({ notifyOnComplete: event.target.checked })} />任务下载完成后弹出系统通知</label>
+          </div>
+          <div className="settings-card">
             <h3>Tracker 列表</h3>
             <p>逗号或空白分隔；留空使用内置公共 tracker（优先级：此处 &gt; ARIA2_TRACKERS 环境变量 &gt; 内置列表）</p>
-            <textarea className="settings-textarea" rows={4} value={state.trackers} onChange={(event) => setState({ ...state, trackers: event.target.value })} placeholder="udp://tracker.example.org:1337/announce, https://tracker.example.com:443/announce" />
+            <textarea className={`settings-textarea ${trackersError ? 'has-error' : ''}`} rows={4} value={state.trackers} onChange={(event) => setState({ ...state, trackers: event.target.value })} placeholder="udp://tracker.example.org:1337/announce, https://tracker.example.com:443/announce" />
+            {trackersError && <p className="field-error">{trackersError}</p>}
           </div>
           <div className="settings-card">
             <h3>最大同时下载数</h3>
@@ -119,8 +174,9 @@ const Settings: React.FC = () => {
             <h3>下载限速</h3>
             <p>全局总速度上限（含正在下载的任务）；0 或留空表示不限速</p>
             <div className="settings-row">
-              <input type="text" value={state.speedLimit} onChange={(event) => setState({ ...state, speedLimit: event.target.value })} placeholder="例如 10M、512K；0 为不限速" />
+              <input type="text" className={speedLimitError ? 'has-error' : ''} value={state.speedLimit} onChange={(event) => setState({ ...state, speedLimit: event.target.value })} placeholder="例如 10M、512K；0 为不限速" />
             </div>
+            {speedLimitError && <p className="field-error">{speedLimitError}</p>}
           </div>
           <div className="settings-card">
             <h3>版本更新 <small className="version-tag">v{pkg.version}</small></h3>
@@ -132,8 +188,8 @@ const Settings: React.FC = () => {
             </div>
           </div>
           <div className="settings-actions">
-            <button className="primary-action" onClick={() => void save()} disabled={saving}>{saving ? '保存中…' : '保存设置'}<span>→</span></button>
-            <button className="secondary-action" style={{ width: 'auto', flex: 'none', padding: '12px 20px', marginTop: 0 }} onClick={() => { if (state?.logDir) void ipc.openPath(state.logDir) }}>打开日志目录</button>
+            <button className="primary-action" onClick={() => void save()} disabled={saving || hasValidationError}>{saving ? '保存中…' : '保存设置'}<span>→</span></button>
+            <button className="secondary-action" onClick={() => { if (state?.logDir) void ipc.openPath(state.logDir) }}>打开日志目录</button>
           </div>
           {notice && <div className={`inline-notice ${notice.type}`}>{notice.type === 'error' ? '!' : '✓'} {notice.text}</div>}
           <div className="about-card">

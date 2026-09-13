@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "electron-updater": "^6.8.9",
+    "fast-xml-parser": "^5.11.1",
     "video.js": "^8.24.0"
   },
   "devDependencies": {

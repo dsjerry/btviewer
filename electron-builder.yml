@@ -8,6 +8,8 @@ files:
 extraResources:
   - from: resources/aria2
     to: aria2
+  - from: resources/icon.png
+    to: icon.png
 win:
   target: nsis
   icon: resources/icon.ico

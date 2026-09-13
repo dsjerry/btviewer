@@ -37,19 +37,15 @@ const DEFAULT_TRACKERS = [
 
 type RpcResponse<T> = { result?: T; error?: { code: number; message: string } }
 type AriaFile = { index: string; path: string; length: string; completedLength: string; selected: string }
-type AriaStatus = { gid: string; status: string; totalLength: string; completedLength: string; downloadSpeed: string; uploadSpeed: string; connections: string; dir: string; errorMessage?: string; bittorrent?: { infoHash?: string; info?: { name?: string } }; info?: string; followedBy?: string[]; belongsTo?: string; files?: AriaFile[] }
+type AriaStatus = { gid: string; status: string; totalLength: string; completedLength: string; downloadSpeed: string; uploadSpeed: string; uploadLength?: string; connections: string; dir: string; errorMessage?: string; bittorrent?: { infoHash?: string; info?: { name?: string } }; info?: string; followedBy?: string[]; belongsTo?: string; files?: AriaFile[] }
 
 function getFileType(filename: string): TorrentFileInfo['type'] { const ext = filename.toLowerCase().slice(filename.lastIndexOf('.')); if (VIDEO_EXTENSIONS.includes(ext)) return 'video'; if (AUDIO_EXTENSIONS.includes(ext)) return 'audio'; if (SUBTITLE_EXTENSIONS.includes(ext)) return 'subtitle'; return 'other' }
 function getErrorMessage(error: unknown) { return error instanceof Error ? error.message : String(error) }
 function isUnderRoot(root: string, path: string) { const rel = relative(resolve(root), resolve(path)); return !!rel && !rel.startsWith('..') && !isAbsolute(rel) }
 function toNumber(value: string | undefined) { return Number(value || 0) || 0 }
 function infoHashFromMagnet(value: string) { return value.match(/[?&]xt=urn:btih:([a-z\d]{32,40})/i)?.[1]?.toLowerCase() || '' }
-// SRT 转 WebVTT：补 WEBVTT 头并把时间戳的毫秒分隔逗号改为点；本身已是 VTT 的内容原样返回
-function srtToVtt(content: string) {
-  const text = content.replace(/^\uFEFF/, '')
-  if (/^\s*WEBVTT/.test(text)) return text
-  return `WEBVTT\n\n${text.replace(/(\d{1,2}:\d{2}:\d{2})\s*,\s*(\d{1,3})/g, '$1.$2').trim()}\n`
-}
+// SRT 转 WebVTT 逻辑在 src/services/subtitle.ts（渲染层本地字幕复用同一实现）
+import { srtToVtt } from '../src/services/subtitle'
 // 由 infoHash 构造可分享的磁力链接（含名称与 tracker）；hash 尚未就绪（仍是 gid）时返回空串
 function buildMagnetURI(hash: string, name: string, trackers: string[] = []) {
   if (!/^[a-z\d]{32,40}$/i.test(hash)) return ''
@@ -119,6 +115,8 @@ class TorrentEngine {
   private destroying = false
   private spawning: Promise<void> | null = null
   private refreshing = false
+  // 任务由“下载中”转为“已完成”时的回调（RSS 下载完成桌面通知用）
+  private completeListener: ((infoHash: string, name: string) => void) | null = null
   private downloadDirOverride = ''
   private trackerOverride = ''
   private maxConcurrent = 0
@@ -147,6 +145,8 @@ class TorrentEngine {
   }
 
   effectiveDownloadDir() { return this.downloadDirOverride || this.dataDir || join(app.getPath('userData'), 'aria2-downloads') }
+
+  onTorrentComplete(listener: (infoHash: string, name: string) => void) { this.completeListener = listener }
 
   private persistTasks() {
     try { writeFileSync(this.tasksFile(), JSON.stringify({ tasks: [...this.taskSources].map(([hash, task]) => ({ hash, ...task })) }, null, 2)) } catch (error) { logger.error('tasks', `persist failed: ${getErrorMessage(error)}`) }
@@ -256,7 +256,7 @@ class TorrentEngine {
     return body.result
   }
 
-  async addTorrent(torrentId: string, onStatus?: (status: TorrentStatus) => void, opts: { wait?: boolean } = {}) {
+  async addTorrent(torrentId: string, onStatus?: (status: TorrentStatus) => void, opts: { wait?: boolean; dir?: string } = {}) {
     await this.startServer()
     const id = torrentId.trim()
     const isTorrentFile = id.toLowerCase().endsWith('.torrent')
@@ -269,7 +269,8 @@ class TorrentEngine {
       if (!existing.files?.length) await this.waitForMetadata(hash)
       return this.toTorrentStatus(hash, this.statuses.get(hash) || existing)
     }
-    const options = { 'seed-time': '0', 'bt-tracker': trackerList(this.trackerOverride), ...(isTorrentFile ? { pause: 'true' } : { 'pause-metadata': 'true', 'bt-save-metadata': 'true' }) }
+    // dir：任务级保存目录（RSS 按季归类用），覆盖全局下载目录
+    const options = { 'seed-time': '0', 'bt-tracker': trackerList(this.trackerOverride), ...(opts.dir ? { dir: opts.dir } : {}), ...(isTorrentFile ? { pause: 'true' } : { 'pause-metadata': 'true', 'bt-save-metadata': 'true' }) }
     const gid = await this.rpc<string>('addUri', [[id], options])
     if (!isTorrentFile) this.metadataGids.add(gid)
     const first = await this.refreshGid(gid, hash || gid, onStatus)
@@ -413,6 +414,13 @@ class TorrentEngine {
   private applyStatus(hash: string, status: AriaStatus) {
     const prev = this.statuses.get(hash)
     this.statuses.set(hash, status)
+    const task = this.taskSources.get(hash)
+    // 完成边沿检测：仅在本地跟踪的任务首次完成时触发，恢复的历史完成任务（prev 为空）不通知
+    if (prev && prev.status !== 'complete' && status.status === 'complete' && task && !task.done) {
+      task.done = true
+      this.persistTasks()
+      this.completeListener?.(hash, status.bittorrent?.info?.name || status.info || hash)
+    }
     const key = this.taskSources.has(hash) ? hash : this.taskSources.has(hash.toLowerCase()) ? hash.toLowerCase() : ''
     const entry = key ? this.taskSources.get(key)! : undefined
     // 首次到达 complete 时把任务标记为已完整下载，重启恢复时会自动校验复用数据
@@ -435,7 +443,7 @@ class TorrentEngine {
     const files = (status.files || []).map((file) => ({ name: relative(status.dir || this.dataDir, file.path) || basename(file.path), path: file.path, size: toNumber(file.length), completed: toNumber(file.completedLength), type: getFileType(file.path) }))
     const name = status.bittorrent?.info?.name || status.info || hash
     const state: TorrentStatus['status'] = status.status === 'error' ? 'error' : this.metadataGids.has(status.gid) ? 'parsing' : status.status === 'paused' ? 'paused' : status.status === 'complete' ? 'seeding' : status.status === 'active' ? 'downloading' : 'connecting'
-    return { infoHash: hash, name, magnetURI: buildMagnetURI(hash, name, trackerList(this.trackerOverride).split(',')), progress: totalSize ? downloaded / totalSize : 0, downloadSpeed, uploadSpeed: toNumber(status.uploadSpeed), downloaded, totalSize, numPeers: toNumber(status.connections), timeRemaining: downloadSpeed > 0 ? Math.ceil(((totalSize - downloaded) / downloadSpeed) * 1000) : 0, status: state, error: state === 'error' ? status.errorMessage || '任务出错' : undefined, files }
+    return { infoHash: hash, name, magnetURI: buildMagnetURI(hash, name, trackerList(this.trackerOverride).split(',')), progress: totalSize ? downloaded / totalSize : 0, downloadSpeed, uploadSpeed: toNumber(status.uploadSpeed), downloaded, totalSize, numPeers: toNumber(status.connections), timeRemaining: downloadSpeed > 0 ? Math.ceil(((totalSize - downloaded) / downloadSpeed) * 1000) : 0, status: state, uploaded: toNumber(status.uploadLength), saveDir: status.dir || '', error: state === 'error' ? status.errorMessage || '任务出错' : undefined, files }
   }
 
   private handleStream(request: IncomingMessage, response: ServerResponse) {
