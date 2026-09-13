@@ -1,8 +1,9 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
+// 类型单一来源：接口定义在 src/services/ipc.ts，这里注解后方法签名不匹配会在编译期暴露
+import type { ElectronAPI } from '../src/services/ipc'
+import type { TorrentStatus, UpdaterEvent } from '../src/types'
 
-type StatusListener = (status: unknown) => void
-
-const electronAPI = {
+const electronAPI: ElectronAPI = {
   minimizeWindow: () => ipcRenderer.invoke('window:minimize'),
   toggleMaximizeWindow: () => ipcRenderer.invoke('window:toggle-maximize'),
   closeWindow: () => ipcRenderer.invoke('window:close'),
@@ -25,6 +26,10 @@ const electronAPI = {
   feedsCheck: (id: string) => ipcRenderer.invoke('feeds:check', id),
   feedsDownloadItem: (feedId: string, guid: string) => ipcRenderer.invoke('feeds:download-item', feedId, guid),
   saveMediaFile: (defaultName: string, dataUrl: string) => ipcRenderer.invoke('media:save', defaultName, dataUrl),
+  recordBegin: (defaultName: string) => ipcRenderer.invoke('media:record-begin', defaultName),
+  recordAppend: (id: string, chunk: Uint8Array) => ipcRenderer.invoke('media:record-append', id, chunk),
+  recordEnd: (id: string) => ipcRenderer.invoke('media:record-end', id),
+  recordAbort: (id: string) => ipcRenderer.invoke('media:record-abort', id),
   checkForUpdates: () => ipcRenderer.invoke('updater:check'),
   installUpdate: () => ipcRenderer.invoke('updater:install'),
   getPathForFile: (file: File) => webUtils.getPathForFile(file),
@@ -34,18 +39,16 @@ const electronAPI = {
   saveSettings: (patch: Record<string, unknown>) => ipcRenderer.invoke('settings:set', patch),
   openPath: (path: string) => ipcRenderer.invoke('shell:open-path', path),
   openExternal: (url: string) => ipcRenderer.invoke('shell:open-external'),
-  onStatusUpdate: (callback: StatusListener) => {
-    const listener = (_event: Electron.IpcRendererEvent, status: unknown) => callback(status)
+  onStatusUpdate: (callback) => {
+    const listener = (_event: Electron.IpcRendererEvent, status: unknown) => callback(status as TorrentStatus)
     ipcRenderer.on('torrent:status-update', listener)
     return () => ipcRenderer.removeListener('torrent:status-update', listener)
   },
-  onUpdaterEvent: (callback: (event: unknown) => void) => {
-    const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => callback(payload)
+  onUpdaterEvent: (callback) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => callback(payload as UpdaterEvent)
     ipcRenderer.on('updater:event', listener)
     return () => ipcRenderer.removeListener('updater:event', listener)
   }
 }
 
 contextBridge.exposeInMainWorld('electronAPI', electronAPI)
-
-export type ElectronAPI = typeof electronAPI

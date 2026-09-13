@@ -1,10 +1,11 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process'
-import { createReadStream, existsSync, mkdirSync, readFileSync, rmdirSync, rmSync, statSync, writeFileSync } from 'fs'
+import { createReadStream, existsSync, mkdirSync, readFileSync, rmdirSync, rmSync, statSync } from 'fs'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'http'
 import { app } from 'electron'
 import { join, basename, dirname, isAbsolute, relative, resolve } from 'path'
 import { createHash, randomBytes } from 'crypto'
 import { logger } from './logger'
+import { writeJsonAtomic } from './storage'
 import type { TorrentFileInfo, TorrentStatus } from '../src/types'
 
 const VIDEO_EXTENSIONS = ['.mp4', '.mkv', '.avi', '.mov', '.webm', '.flv', '.wmv', '.m4v', '.ts', '.rmvb']
@@ -149,7 +150,7 @@ class TorrentEngine {
   onTorrentComplete(listener: (infoHash: string, name: string) => void) { this.completeListener = listener }
 
   private persistTasks() {
-    try { writeFileSync(this.tasksFile(), JSON.stringify({ tasks: [...this.taskSources].map(([hash, task]) => ({ hash, ...task })) }, null, 2)) } catch (error) { logger.error('tasks', `persist failed: ${getErrorMessage(error)}`) }
+    try { writeJsonAtomic(this.tasksFile(), { tasks: [...this.taskSources].map(([hash, task]) => ({ hash, ...task })) }, 2) } catch (error) { logger.error('tasks', `persist failed: ${getErrorMessage(error)}`) }
   }
 
   private restoreTasks() {
@@ -247,7 +248,7 @@ class TorrentEngine {
     try {
       response = await fetch(this.rpcUrl, { method: 'POST', headers: { 'content-type': 'application/json' }, signal: AbortSignal.timeout(5000), body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method: method.startsWith(`${RPC_VERSION}.`) ? method : `${RPC_VERSION}.${method}`, params: [`token:${this.secret}`, ...params] }) })
     } catch (error) {
-      if (error instanceof Error && error.name === 'TimeoutError') throw new Error('aria2 RPC 请求超时')
+      if (error instanceof Error && error.name === 'TimeoutError') throw new Error('aria2 RPC 请求超时', { cause: error })
       throw error
     }
     const body = await response.json() as RpcResponse<T>

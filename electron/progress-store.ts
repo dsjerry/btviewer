@@ -1,7 +1,8 @@
-import { readFileSync, writeFileSync } from 'fs'
+import { readFileSync } from 'fs'
 import { join } from 'path'
 import { app } from 'electron'
 import type { WatchProgress } from '../src/types'
+import { writeJsonAtomic } from './storage'
 
 // 观看进度持久化：key 为 infoHash:filePath，看完或不足 5s 的记录会被清除
 const progressFile = () => join(app.getPath('userData'), 'progress.json')
@@ -32,5 +33,5 @@ export function setProgress(infoHash: string, filePath: string, position: number
 }
 
 function persist() {
-  try { writeFileSync(progressFile(), JSON.stringify(cache, null, 2)) } catch { /* 写盘失败只影响下次续播 */ }
+  try { writeJsonAtomic(progressFile(), cache, 2) } catch { /* 写盘失败只影响下次续播 */ }
 }

@@ -1,4 +1,5 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { writeJsonAtomic } from './storage'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { randomBytes } from 'crypto'
@@ -38,7 +39,7 @@ function loadFeeds(): Feed[] {
 }
 
 function persist() {
-  try { writeFileSync(feedsFile(), JSON.stringify(loadFeeds(), null, 2)) } catch (error) { logger.error('feeds', `persist failed: ${error instanceof Error ? error.message : String(error)}`) }
+  try { writeJsonAtomic(feedsFile(), loadFeeds(), 2) } catch (error) { logger.error('feeds', `persist failed: ${error instanceof Error ? error.message : String(error)}`) }
 }
 
 export function getFeeds(): Feed[] { return loadFeeds() }

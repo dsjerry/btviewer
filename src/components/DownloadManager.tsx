@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { memo, useCallback, useState } from 'react'
 import { ipc } from '../services/ipc'
 import type { TorrentStatus } from '../types'
 interface Props { torrents: TorrentStatus[]; onRefresh: () => void; onSelect: (torrent: TorrentStatus) => void }
@@ -42,11 +42,39 @@ const TaskDetail: React.FC<{ torrent: TorrentStatus }> = ({ torrent }) => {
   )
 }
 
+interface CardProps {
+  torrent: TorrentStatus
+  busy: boolean
+  expanded: boolean
+  onSelect: (torrent: TorrentStatus) => void
+  onToggle: (infoHash: string) => void
+  onAction: (hash: string, task: () => Promise<{ success: boolean; error?: string }>) => void
+  onRemove: (torrent: TorrentStatus) => void
+}
+// 卡片 memo：状态每秒刷新，内容无变化的卡片直接跳过重渲染（展开详情时始终跟随最新数据）
+const DownloadCard = memo<CardProps>(({ torrent, busy, expanded, onSelect, onToggle, onAction, onRemove }) => (
+  <article className="download-item">
+    <div className="download-main"><div className={`download-status ${torrent.status}`}><span />{statusText[torrent.status]}</div><h3 title={torrent.name}>{torrent.name}</h3><button className="text-action" onClick={() => onToggle(torrent.infoHash)}>{expanded ? '收起详情' : '详情'}</button><button className="text-action" onClick={() => onSelect(torrent)}>查看文件 →</button></div>
+    <div className="big-progress"><span style={{ width: `${torrent.progress * 100}%` }} /></div>
+    <div className="download-stats"><span><b>↓</b> {format(torrent.downloadSpeed, 'B/s')}</span><span><b>↑</b> {format(torrent.uploadSpeed, 'B/s')}</span><span>{torrent.numPeers} 个节点</span><span>{format(torrent.downloaded)} / {format(torrent.totalSize)}</span><span>剩余 {time(torrent.timeRemaining)}</span></div>
+    {torrent.error && <p className="task-error">{torrent.error}</p>}
+    {expanded && <TaskDetail torrent={torrent} />}
+    <div className="item-actions">{torrent.status === 'paused' ? <button className="small-button" disabled={busy} onClick={() => onAction(torrent.infoHash, () => ipc.resumeTorrent(torrent.infoHash))}>▶ 恢复</button> : <button className="small-button" disabled={busy || torrent.status === 'seeding' || torrent.status === 'error'} onClick={() => onAction(torrent.infoHash, () => ipc.pauseTorrent(torrent.infoHash))}>Ⅱ 暂停</button>}<button className="small-button danger" disabled={busy} onClick={() => onRemove(torrent)}>× 移除</button></div>
+  </article>
+), (a, b) => a.busy === b.busy && a.expanded === b.expanded && a.onSelect === b.onSelect && a.onToggle === b.onToggle && a.onAction === b.onAction && a.onRemove === b.onRemove && JSON.stringify(a.torrent) === JSON.stringify(b.torrent))
+
 const DownloadManager: React.FC<Props> = ({ torrents, onRefresh, onSelect }) => {
   const [busy, setBusy] = useState<string | null>(null)
   const [expanded, setExpanded] = useState<string | null>(null)
-  const action = async (hash: string, task: () => Promise<{ success: boolean; error?: string }>) => { setBusy(hash); try { const result = await task(); if (!result.success) window.alert(result.error || '操作失败'); else onRefresh() } catch (error) { window.alert(error instanceof Error ? error.message : '操作失败') } finally { setBusy(null) } }
-  const remove = (torrent: TorrentStatus) => { if (window.confirm('移除这个下载任务？已下载的数据将保留。')) void action(torrent.infoHash, () => ipc.removeTorrent(torrent.infoHash, false)) }
-  return <div className="page-content"><div className="page-heading"><div><span className="eyebrow">下载队列</span><h2>下载任务</h2><p>{torrents.length ? `${torrents.length} 个本地任务正在管理` : '所有任务都会显示在这里'}</p></div><span className="heading-count">{torrents.length.toString().padStart(2, '0')}</span></div>{!torrents.length ? <div className="empty-state"><span>↓</span><strong>还没有下载任务</strong><p>添加磁力链接后，任务会出现在这里。</p></div> : <div className="download-stack">{torrents.map((torrent) => <article className="download-item" key={torrent.infoHash}><div className="download-main"><div className={`download-status ${torrent.status}`}><span />{statusText[torrent.status]}</div><h3 title={torrent.name}>{torrent.name}</h3><button className="text-action" onClick={() => setExpanded(expanded === torrent.infoHash ? null : torrent.infoHash)}>{expanded === torrent.infoHash ? '收起详情' : '详情'}</button><button className="text-action" onClick={() => onSelect(torrent)}>查看文件 →</button></div><div className="big-progress"><span style={{ width: `${torrent.progress * 100}%` }} /></div><div className="download-stats"><span><b>↓</b> {format(torrent.downloadSpeed, 'B/s')}</span><span><b>↑</b> {format(torrent.uploadSpeed, 'B/s')}</span><span>{torrent.numPeers} 个节点</span><span>{format(torrent.downloaded)} / {format(torrent.totalSize)}</span><span>剩余 {time(torrent.timeRemaining)}</span></div>{torrent.error && <p className="task-error">{torrent.error}</p>}{expanded === torrent.infoHash && <TaskDetail torrent={torrent} />}<div className="item-actions">{torrent.status === 'paused' ? <button className="small-button" disabled={busy === torrent.infoHash} onClick={() => void action(torrent.infoHash, () => ipc.resumeTorrent(torrent.infoHash))}>▶ 恢复</button> : <button className="small-button" disabled={busy === torrent.infoHash || torrent.status === 'seeding' || torrent.status === 'error'} onClick={() => void action(torrent.infoHash, () => ipc.pauseTorrent(torrent.infoHash))}>Ⅱ 暂停</button>}<button className="small-button danger" disabled={busy === torrent.infoHash} onClick={() => remove(torrent)}>× 移除</button></div></article>)}</div>}</div>
+  const action = useCallback(async (hash: string, task: () => Promise<{ success: boolean; error?: string }>) => {
+    setBusy(hash)
+    try { const result = await task(); if (!result.success) window.alert(result.error || '操作失败'); else onRefresh() } catch (error) { window.alert(error instanceof Error ? error.message : '操作失败') } finally { setBusy(null) }
+  }, [onRefresh])
+  const onAction = useCallback((hash: string, task: () => Promise<{ success: boolean; error?: string }>) => void action(hash, task), [action])
+  const remove = useCallback((torrent: TorrentStatus) => { if (window.confirm('移除这个下载任务？已下载的数据将保留。')) void action(torrent.infoHash, () => ipc.removeTorrent(torrent.infoHash, false)) }, [action])
+  const toggle = useCallback((infoHash: string) => setExpanded((current) => current === infoHash ? null : infoHash), [])
+  const isBusy = useCallback((torrent: TorrentStatus) => busy === torrent.infoHash, [busy])
+  const isExpanded = useCallback((torrent: TorrentStatus) => expanded === torrent.infoHash, [expanded])
+  return <div className="page-content"><div className="page-heading"><div><span className="eyebrow">下载队列</span><h2>下载任务</h2><p>{torrents.length ? `${torrents.length} 个本地任务正在管理` : '所有任务都会显示在这里'}</p></div><span className="heading-count">{torrents.length.toString().padStart(2, '0')}</span></div>{!torrents.length ? <div className="empty-state"><span>↓</span><strong>还没有下载任务</strong><p>添加磁力链接后，任务会出现在这里。</p></div> : <div className="download-stack">{torrents.map((torrent) => <DownloadCard key={torrent.infoHash} torrent={torrent} busy={isBusy(torrent)} expanded={isExpanded(torrent)} onSelect={onSelect} onToggle={toggle} onAction={onAction} onRemove={remove} />)}</div>}</div>
 }
 export default DownloadManager

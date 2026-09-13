@@ -1,12 +1,14 @@
 import { app, BrowserWindow, ipcMain, dialog, Menu, shell, nativeTheme, Tray, Notification } from 'electron'
-import { join } from 'path'
-import { writeFileSync } from 'fs'
+import { join, resolve } from 'path'
+import { createWriteStream, rmSync, writeFileSync } from 'fs'
+import { randomUUID } from 'crypto'
 import { torrentEngine } from './torrent-engine'
 import { getProgress, setProgress } from './progress-store'
 import { getThumbnails, saveThumbnail } from './thumbnail-store'
 import { loadSettings, saveSettings } from './settings'
 import { checkForUpdates, initUpdater, installUpdate } from './updater'
 import { addFeed, checkAllFeeds, checkFeed, downloadFeedItem, getFeeds, removeFeed, startPolling, updateFeed } from './rss'
+import { isUnderRoot } from './torrent-engine'
 import { logger } from './logger'
 import type { TorrentStatus } from '../src/types'
 
@@ -35,6 +37,17 @@ function setupCompleteNotifications() {
     if (loadSettings().notifyOnComplete === false || !Notification.isSupported()) return
     new Notification({ title: 'BTViewer 下载完成', body: name }).show()
   })
+}
+
+// 录制会话：渲染层 MediaRecorder 的分片经 IPC 流式写入磁盘，内存不随录制时长增长
+const recordHandles = new Map<string, { stream: ReturnType<typeof createWriteStream>; path: string }>()
+
+function closeRecordHandle(id: string, remove: boolean) {
+  const handle = recordHandles.get(id)
+  if (!handle) return
+  recordHandles.delete(id)
+  try { handle.stream.end() } catch { /* 已关闭时忽略 */ }
+  if (remove) { try { rmSync(handle.path, { force: true }) } catch { /* 删除失败不影响主流程 */ } }
 }
 
 function trayIconPath() {
@@ -240,6 +253,36 @@ function setupIPC() {
     try { writeFileSync(result.filePath, Buffer.from(match[1], 'base64')); return { success: true, data: result.filePath } } catch (error) { return { success: false, error: getErrorMessage(error) } }
   })
 
+  // 录制：先选保存路径，之后分片流式写入（结构化克隆传输，无 base64 膨胀）
+  ipcMain.handle('media:record-begin', async (_event, defaultName: string) => {
+    if (!mainWindow || mainWindow.isDestroyed()) return { success: false, error: '窗口尚未准备好' }
+    const name = String(defaultName || 'record').replace(/[\\/:*?"<>|]/g, '_')
+    const result = await dialog.showSaveDialog(mainWindow, { defaultPath: name, filters: [{ name: 'WebM 视频', extensions: ['webm'] }] })
+    if (result.canceled || !result.filePath) return { success: false, canceled: true }
+    const id = randomUUID()
+    recordHandles.set(id, { stream: createWriteStream(result.filePath), path: result.filePath })
+    return { success: true, data: { id, path: result.filePath } }
+  })
+
+  ipcMain.handle('media:record-append', (_event, id: string, chunk: Uint8Array) => {
+    const handle = recordHandles.get(String(id))
+    if (!handle) return { success: false, error: '录制会话不存在' }
+    try { handle.stream.write(Buffer.from(chunk)); return { success: true } } catch (error) { return { success: false, error: getErrorMessage(error) } }
+  })
+
+  ipcMain.handle('media:record-end', (_event, id: string) => {
+    const handle = recordHandles.get(String(id))
+    if (!handle) return { success: false, error: '录制会话不存在' }
+    handle.stream.end()
+    recordHandles.delete(String(id))
+    return { success: true, data: handle.path }
+  })
+
+  ipcMain.handle('media:record-abort', (_event, id: string) => {
+    closeRecordHandle(String(id), true)
+    return { success: true }
+  })
+
   ipcMain.handle('updater:check', async () => {
     try { await checkForUpdates(); return { success: true } } catch (error) { return { success: false, error: getErrorMessage(error) } }
   })
@@ -292,7 +335,12 @@ function setupIPC() {
   })
 
   ipcMain.handle('shell:open-path', async (_event, path: string) => {
-    const error = await shell.openPath(path)
+    // 只允许打开下载目录和日志目录内的路径，避免渲染层被注入后任意打开文件
+    const target = resolve(String(path || ''))
+    const allowedRoots = [torrentEngine.effectiveDownloadDir(), logger.logDir()].filter(Boolean).map((root) => resolve(root))
+    const allowed = allowedRoots.some((root) => target === root || isUnderRoot(root, target))
+    if (!allowed) return { success: false, error: '仅允许打开下载目录或日志目录内的路径' }
+    const error = await shell.openPath(target)
     return error ? { success: false, error } : { success: true }
   })
 
@@ -306,6 +354,8 @@ function setupIPC() {
 async function shutdown() {
   if (isQuitting) return
   isQuitting = true
+  // 收尾未完成的录制句柄（半成品文件保留在磁盘，由用户自行处理）
+  for (const id of [...recordHandles.keys()]) closeRecordHandle(id, false)
   await torrentEngine.destroy()
 }
 

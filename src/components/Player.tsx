@@ -79,7 +79,7 @@ const Player: React.FC<PlayerProps> = ({ infoHash, file, subtitles, playlist, on
   const [recordSeconds, setRecordSeconds] = useState(0)
   const toastTimerRef = useRef(0)
   const recorderRef = useRef<MediaRecorder | null>(null)
-  const recordChunksRef = useRef<Blob[]>([])
+  const recordSessionRef = useRef<string | null>(null)
   const recordTimerRef = useRef(0)
   const recordButtonRef = useRef<VjsControlButton | null>(null)
 
@@ -185,40 +185,34 @@ const Player: React.FC<PlayerProps> = ({ infoHash, file, subtitles, playlist, on
     } catch { showToast('截屏失败：画面尚未就绪') }
   }
 
-  // 片段录制：实时把当前播放录成 webm（captureStream 只取媒体本身，不含控制条）
+  // 片段录制：开始前先选保存路径，录制中分片流式写盘（内存不随时长增长）；
+  // captureStream 只取媒体本身，不含控制条
   const stopRecording = () => { if (recorderRef.current?.state === 'recording') recorderRef.current.stop() }
 
-  const startRecording = () => {
+  const startRecording = async () => {
     const video = videoElement()
     // TS 的 DOM 类型库还没有 captureStream，运行时 Chromium 一直支持
     const capture = (video as (HTMLVideoElement & { captureStream?: () => MediaStream }) | null)?.captureStream?.bind(video)
     if (!video || !video.videoWidth || typeof capture !== 'function') { showToast('当前画面不支持录制'); return }
+    const begin = await ipc.recordBegin(`${file.name.replace(/\.[^.]+$/, '')}_${stamp()}.webm`)
+    if (!begin.success || !begin.data) { showToast(begin.canceled ? null : begin.error || '无法开始录制'); return }
+    const session = begin.data
     const mimeType = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'].find((type) => MediaRecorder.isTypeSupported(type))
     const recorder = new MediaRecorder(capture(), mimeType ? { mimeType, videoBitsPerSecond: 6_000_000 } : undefined)
-    recordChunksRef.current = []
-    recorder.ondataavailable = (event) => { if (event.data.size) recordChunksRef.current.push(event.data) }
+    recorder.ondataavailable = (event) => {
+      if (!event.data.size) return
+      void event.data.arrayBuffer().then((buffer) => ipc.recordAppend(session.id, new Uint8Array(buffer))).catch(() => undefined)
+    }
     recorder.onstop = () => {
       window.clearInterval(recordTimerRef.current)
       setRecording(false)
       recorderRef.current = null
-      const blob = new Blob(recordChunksRef.current, { type: recorder.mimeType || 'video/webm' })
-      recordChunksRef.current = []
-      if (!blob.size) { showToast('没有录到内容'); return }
-      void (async () => {
-        try {
-          const dataUrl = await new Promise<string>((resolve, reject) => {
-            const reader = new FileReader()
-            reader.onload = () => resolve(String(reader.result))
-            reader.onerror = () => reject(new Error('读取录制数据失败'))
-            reader.readAsDataURL(blob)
-          })
-          const result = await ipc.saveMediaFile(`${file.name.replace(/\.[^.]+$/, '')}_${stamp()}.webm`, dataUrl)
-          showToast(result.success ? `录制已保存：${result.data}` : result.canceled ? null : result.error || '保存录制失败')
-        } catch (error) { showToast(error instanceof Error ? error.message : '保存录制失败') }
-      })()
+      recordSessionRef.current = null
+      void ipc.recordEnd(session.id).then((result) => showToast(result.success ? `录制已保存：${result.data}` : result.error || '保存录制失败')).catch(() => showToast('保存录制失败'))
     }
     recorder.start(1000)
     recorderRef.current = recorder
+    recordSessionRef.current = session.id
     setRecordSeconds(0)
     setRecording(true)
     recordTimerRef.current = window.setInterval(() => setRecordSeconds((value) => value + 1), 1000)
@@ -226,7 +220,7 @@ const Player: React.FC<PlayerProps> = ({ infoHash, file, subtitles, playlist, on
 
   // 回调经 ref 传给控制条按钮，保证按钮拿到的一直是最新处理函数
   const snapshotRef = useRef(snapshot); snapshotRef.current = snapshot
-  const recordToggleRef = useRef(startRecording); recordToggleRef.current = recording ? stopRecording : startRecording
+  const recordToggleRef = useRef<() => void>(() => undefined); recordToggleRef.current = recording ? stopRecording : () => void startRecording()
 
   // 录制状态同步到控制条按钮（红点 + 文案）
   useEffect(() => {
@@ -377,11 +371,12 @@ const Player: React.FC<PlayerProps> = ({ infoHash, file, subtitles, playlist, on
       active = false
       controller.abort()
       try { saveProgress() } catch { /* 播放器已不可用 */ }
-      // 切集/返回时若还在录制：直接丢弃本次录制（跨文件的录制没有意义）
+      // 切集/返回时若还在录制：中止本次录制并删除半成品文件（跨文件的录制没有意义）
       try { const recorder = recorderRef.current; if (recorder && recorder.state === 'recording') { recorder.onstop = null; recorder.stop() } } catch { /* 忽略 */ }
       recorderRef.current = null
       window.clearInterval(recordTimerRef.current)
       setRecording(false)
+      if (recordSessionRef.current) { void ipc.recordAbort(recordSessionRef.current).catch(() => undefined); recordSessionRef.current = null }
       recordButtonRef.current = null
       playerRef.current?.dispose()
       playerRef.current = null
