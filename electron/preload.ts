@@ -7,7 +7,27 @@ const electronAPI: ElectronAPI = {
   minimizeWindow: () => ipcRenderer.invoke('window:minimize'),
   toggleMaximizeWindow: () => ipcRenderer.invoke('window:toggle-maximize'),
   closeWindow: () => ipcRenderer.invoke('window:close'),
-  addTorrent: (torrentId: string) => ipcRenderer.invoke('torrent:add', torrentId),
+  addTask: (input: string) => ipcRenderer.invoke('torrent:add', input),
+  checkYtDlp: (customPath?: string) => ipcRenderer.invoke('ytdlp:check', customPath),
+  installYtDlp: () => ipcRenderer.invoke('ytdlp:install'),
+  updateYtDlp: (binaryPath: string) => ipcRenderer.invoke('ytdlp:update', binaryPath),
+  installFfmpeg: () => ipcRenderer.invoke('ffmpeg:install'),
+  installDeno: () => ipcRenderer.invoke('deno:install'),
+  onYtdlpInstallProgress: (callback: (progress: { received: number; total: number }) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => callback(payload as { received: number; total: number })
+    ipcRenderer.on('ytdlp:install-progress', listener)
+    return () => ipcRenderer.removeListener('ytdlp:install-progress', listener)
+  },
+  onFfmpegInstallProgress: (callback: (progress: { received: number; total: number }) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => callback(payload as { received: number; total: number })
+    ipcRenderer.on('ffmpeg:install-progress', listener)
+    return () => ipcRenderer.removeListener('ffmpeg:install-progress', listener)
+  },
+  onDenoInstallProgress: (callback: (progress: { received: number; total: number }) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => callback(payload as { received: number; total: number })
+    ipcRenderer.on('deno:install-progress', listener)
+    return () => ipcRenderer.removeListener('deno:install-progress', listener)
+  },
   removeTorrent: (infoHash: string, destroy = false) => ipcRenderer.invoke('torrent:remove', infoHash, destroy),
   pauseTorrent: (infoHash: string) => ipcRenderer.invoke('torrent:pause', infoHash),
   resumeTorrent: (infoHash: string) => ipcRenderer.invoke('torrent:resume', infoHash),
@@ -38,7 +58,7 @@ const electronAPI: ElectronAPI = {
   getSettings: () => ipcRenderer.invoke('settings:get'),
   saveSettings: (patch: Record<string, unknown>) => ipcRenderer.invoke('settings:set', patch),
   openPath: (path: string) => ipcRenderer.invoke('shell:open-path', path),
-  openExternal: (url: string) => ipcRenderer.invoke('shell:open-external'),
+  openExternal: (url: string) => ipcRenderer.invoke('shell:open-external', url),
   onStatusUpdate: (callback) => {
     const listener = (_event: Electron.IpcRendererEvent, status: unknown) => callback(status as TorrentStatus)
     ipcRenderer.on('torrent:status-update', listener)

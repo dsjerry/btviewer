@@ -1,10 +1,20 @@
 import type { AppSettings, Feed, IPCResult, TorrentStatus, UpdaterEvent, WatchProgress } from '../types'
 
+export interface YtdlpCheck { available: boolean; path: string; ffmpegAvailable: boolean; jsRuntime: { name: string; path: string; version?: string } | null }
+
 export interface ElectronAPI {
   minimizeWindow: () => Promise<{ success: boolean }>
   toggleMaximizeWindow: () => Promise<{ success: boolean; maximized?: boolean }>
   closeWindow: () => Promise<{ success: boolean }>
-  addTorrent: (torrentId: string) => Promise<IPCResult<TorrentStatus>>
+  addTask: (input: string) => Promise<IPCResult<TorrentStatus>>
+  checkYtDlp: (customPath?: string) => Promise<IPCResult<YtdlpCheck>>
+  installYtDlp: () => Promise<IPCResult<string>>
+  updateYtDlp: (binaryPath: string) => Promise<IPCResult<string>>
+  installFfmpeg: () => Promise<IPCResult<string>>
+  installDeno: () => Promise<IPCResult<string>>
+  onYtdlpInstallProgress: (callback: (progress: { received: number; total: number }) => void) => () => void
+  onFfmpegInstallProgress: (callback: (progress: { received: number; total: number }) => void) => () => void
+  onDenoInstallProgress: (callback: (progress: { received: number; total: number }) => void) => () => void
   removeTorrent: (infoHash: string, destroy?: boolean) => Promise<IPCResult>
   pauseTorrent: (infoHash: string) => Promise<IPCResult>
   resumeTorrent: (infoHash: string) => Promise<IPCResult>
@@ -57,7 +67,15 @@ export const ipc: ElectronAPI = {
   minimizeWindow: () => getElectronAPI().minimizeWindow(),
   toggleMaximizeWindow: () => getElectronAPI().toggleMaximizeWindow(),
   closeWindow: () => getElectronAPI().closeWindow(),
-  addTorrent: (torrentId) => getElectronAPI().addTorrent(torrentId),
+  addTask: (input) => getElectronAPI().addTask(input),
+  checkYtDlp: (customPath) => getElectronAPI().checkYtDlp(customPath),
+  installYtDlp: () => getElectronAPI().installYtDlp(),
+  updateYtDlp: (binaryPath) => getElectronAPI().updateYtDlp(binaryPath),
+  installFfmpeg: () => getElectronAPI().installFfmpeg(),
+  installDeno: () => getElectronAPI().installDeno(),
+  onYtdlpInstallProgress: (callback) => getElectronAPI().onYtdlpInstallProgress(callback),
+  onFfmpegInstallProgress: (callback) => getElectronAPI().onFfmpegInstallProgress(callback),
+  onDenoInstallProgress: (callback) => getElectronAPI().onDenoInstallProgress(callback),
   removeTorrent: (infoHash, destroy) => getElectronAPI().removeTorrent(infoHash, destroy),
   pauseTorrent: (infoHash) => getElectronAPI().pauseTorrent(infoHash),
   resumeTorrent: (infoHash) => getElectronAPI().resumeTorrent(infoHash),

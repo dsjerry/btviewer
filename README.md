@@ -2,23 +2,24 @@
 
 简体中文 | [English](./README.en.md)
 
-BTViewer 是一个基于 Electron 的本地 BT 媒体工具。它负责解析磁力链接或 `.torrent` 文件，并提供保存到媒体库、播放可播放资源和下载全部资源三种操作。欢迎通过 [Issues](https://github.com/dsjerry/btviewer/issues) 反馈问题，参与贡献请阅读 [CONTRIBUTING.md](./CONTRIBUTING.md)。
+BTViewer 是一个基于 Electron 的本地多协议下载器。它支持解析磁力链接或 `.torrent` 文件、HTTP(S)/FTP 直链与 Metalink 下载，并可通过外挂 yt-dlp 解析下载视频站点（YouTube、Bilibili 等）。欢迎通过 [Issues](https://github.com/dsjerry/btviewer/issues) 反馈问题，参与贡献请阅读 [CONTRIBUTING.md](./CONTRIBUTING.md)。
 
 ## 当前架构
 
 ```text
 Electron + React UI
         ↓ IPC
-本地 aria2c（JSON-RPC）
-        ↓
-DHT / UDP Tracker / TCP Peer
+本地 aria2c（JSON-RPC）          yt-dlp（可选外挂）
+  ├─ DHT / UDP Tracker / TCP Peer   ├─ 视频站点解析
+  ├─ HTTP(S) / FTP 直链（分片加速）  └─ 音视频流下载
+  └─ Metalink
         ↓
 本地 HTTP Range 流服务
         ↓
 Video.js 播放器
 ```
 
-项目不再使用 WebTorrent 作为下载引擎。aria2 负责资源发现和下载，Electron 主进程负责 RPC 管理及本地媒体流转发，renderer 只负责界面和交互。
+aria2 负责资源发现和下载（BT 与直链共用一个下载队列），yt-dlp 作为可选外挂负责视频站点，Electron 主进程负责 RPC 管理及本地媒体流转发，renderer 只负责界面和交互。
 
 ## 功能
 
@@ -27,6 +28,9 @@ Video.js 播放器
   - **保存到媒体库**：保留任务，不自动下载全部文件
   - **播放**：选择第一个可播放的视频或音频文件，并开始按需下载（数据未就绪时自动等待）
   - **下载全部资源**：选择任务中的全部文件并开始下载
+- HTTP(S)/FTP 直链下载：多线程分片加速（每服务器连接数可调），与 BT 任务统一管理
+- Metalink 文件：本地解析后按文件展开为直链任务，多镜像自动切换
+- 视频站点（可选）：yt-dlp 可一键安装，网页类链接自动解析下载（解析 YouTube 高画质需 JS 运行时 deno，合并音视频需 ffmpeg，设置页均可一键安装）
 - 媒体库管理：浏览任务文件、移除记录或删除任务与已下载文件
 - 下载任务状态、速度、节点数、进度与剩余时间展示，支持暂停、恢复和移除
 - 设置页：自定义下载目录、Tracker 列表、最大同时下载数（持久化并对新任务生效）
@@ -69,6 +73,19 @@ ARIA2_TRACKERS="udp://tracker.example.org:1337/announce,https://tracker.example.
 ARIA2_DHT_ENTRY_POINT="dht.example.org:6881" npm run dev
 ARIA2_DHT_ENTRY_POINT6="[2001:db8::1]:6881" npm run dev
 ```
+
+## 视频站点与 YouTube 高画质
+
+网页类链接会交给 yt-dlp 解析下载（YouTube、Bilibili 等）。YouTube 的 1080p 及以上由分离的音视频流（DASH）或 HLS 分段提供，需要满足以下条件：
+
+- **JS 运行时（必需）**：yt-dlp 2025+ 已弃用内置 JS 解释器，解 YouTube 的 `n` 签名挑战必须依赖外部运行时。应用按 `deno → node → bun` 的顺序探测系统已有的运行时（版本要求 deno ≥ 2.3 / node ≥ 22 / bun 1.2.11–1.3.14），命中即直接使用；都没有时，可在设置页「视频站点解析」卡片一键安装 deno（约 40MB）。**系统已装 node ≥ 22 的用户无需安装任何东西。**
+  - 注意：Electron 内嵌的 Node **不能**用于此用途——它不是独立可执行文件（需 `ELECTRON_RUN_AS_NODE=1`，而 yt-dlp 自行 spawn 不会设置），且 Electron 33 内嵌的 Node 20 低于门槛，yt-dlp 会判为 `unsupported`。必须使用外部 deno/node/bun。
+  - 缺失该运行时时，带 Cookies 的会话会报 `n challenge solving failed`（表现为 Video unavailable 或只能拿 360p）。
+- **ffmpeg（可选）**：合并分离的音视频流（DASH）。未安装时只能下载预合并的单文件格式（YouTube 通常为 360p；配合 Cookies + web_safari 可拿到 1080p 的 HLS 单文件）。
+- **浏览器 Cookies（可选）**：部分视频要求登录。配置后应用会使用 `web_embedded,web_safari` 客户端解析：`web_embedded` 可拿到 4K（vp9/av01），对部分视频不可用时自动回退到 `web_safari`（最高 1080p 的 HLS 单文件）。注意 Chrome/Edge 127+ 使用 app-bound 加密，常报 `Failed to decrypt with DPAPI` 读取失败，推荐 Firefox（运行中也通常可读）；读取时需完全退出对应浏览器。
+- **代理（可选）**：访问 YouTube 需要能连通 Google 的网络，可在设置页填写 HTTP/SOCKS 代理。
+
+yt-dlp、ffmpeg、deno 均可由设置页一键自动安装（下载到应用数据目录，不污染系统），三者采用同一套按需下载流程。下载格式默认优选「同容器」组合（`mp4 视频 + m4a 音频` 或 `webm 视频 + webm 音频`），合并后可直接被内置播放器（Chromium）播放；**不强制 h264**——h264 在 YouTube 最高只有 1080p，强制它会丢掉 4K（4K 仅 vp9/av01 提供）。任务因缺少运行时/ffmpeg 失败时，错误提示会直接指明对应的一键安装入口，安装完成后出错的视频任务会自动重试。
 
 ## 开发
 
@@ -132,7 +149,8 @@ magnet:?xt=urn:btih:08ada5a7a6183aae1e09d831df6748d566095a10
 electron/
   main.ts              Electron 主进程、窗口和 IPC
   preload.ts           安全 IPC bridge
-  torrent-engine.ts    aria2 RPC 与本地媒体流服务
+  torrent-engine.ts    aria2 RPC、协议分流与本地媒体流服务
+  ytdlp-engine.ts      yt-dlp 外挂（视频站点探测与下载）
   settings.ts          应用设置持久化（settings.json）
 src/
   components/          首页、媒体库、下载任务、播放器和设置页
@@ -179,7 +197,7 @@ Chromium/Video.js 对视频编码和容器格式有支持边界。建议优先�
 
 ## 免责声明
 
-本应用仅提供 BitTorrent 协议的下载与播放功能，不内置、不推荐、不分发任何受版权保护的资源。使用者需自行确保下载与分享的内容合法，并承担相应的法律责任。
+本应用仅提供 BitTorrent、HTTP(S)/FTP 直链与 Metalink 协议的下载与播放功能，不内置、不推荐、不分发任何受版权保护的资源。使用者需自行确保下载与分享的内容合法，并承担相应的法律责任。
 
 ## 许可证
 

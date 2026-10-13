@@ -9,6 +9,9 @@ export interface TorrentFileInfo {
 
 export type TorrentStatusType = 'parsing' | 'connecting' | 'downloading' | 'seeding' | 'paused' | 'error'
 
+// 任务协议类型：bt（磁力/torrent）、http/ftp（直链）、metalink、video（yt-dlp 视频站点）
+export type TaskProtocol = 'bt' | 'http' | 'ftp' | 'metalink' | 'video'
+
 export interface TorrentStatus {
   infoHash: string
   name: string
@@ -26,6 +29,10 @@ export interface TorrentStatus {
   uploaded: number
   // 任务保存目录
   saveDir: string
+  // 任务协议；缺省视为 bt（兼容旧持久化数据）
+  type?: TaskProtocol
+  // 直链/视频任务的原始 URL（详情展示与复制）
+  sourceUrl?: string
   error?: string
 }
 
@@ -53,6 +60,14 @@ export interface AppSettings {
   trackers?: string
   maxConcurrentDownloads?: number
   speedLimit?: string
+  // 直链下载：每服务器最大连接数（1-16，缺省 8）
+  httpSplit?: number
+  // yt-dlp 可执行文件路径；缺省从 PATH 查找
+  ytdlpPath?: string
+  // yt-dlp 的 cookies 来源浏览器（登录 YouTube 后可解锁高画质）；空则不带 cookies
+  ytdlpBrowser?: string
+  // 代理地址（http/socks4/socks5），用于直链与视频站点下载；BT/DHT 不走代理
+  proxy?: string
   logDir?: string
   theme?: ThemeMode
   // 关闭窗口时是否隐藏到托盘；缺省视为开启
@@ -92,4 +107,8 @@ export type IPCChannel =
   | 'torrent:resume'
   | 'torrent:all-status'
   | 'torrent:get-stream-url'
+  | 'ytdlp:check'
+  | 'ytdlp:install'
+  | 'ytdlp:update'
+  | 'ffmpeg:install'
   | 'dialog:open-file'

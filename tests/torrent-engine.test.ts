@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { buildMagnetURI, getFileType, infoHashFromMagnet, isUnderRoot, srtToVtt, torrentInfoHash, trackerList } from '../electron/torrent-engine'
+import { buildMagnetURI, classifyInput, getFileType, infoHashFromMagnet, isUnderRoot, parseMetalink, srtToVtt, stableKey, torrentInfoHash, trackerList } from '../electron/torrent-engine'
 
 // 引擎模块引入了 electron，但被测的纯逻辑函数不会触达它
 vi.mock('electron', () => ({}))
@@ -106,5 +106,56 @@ describe('buildMagnetURI', () => {
     expect(buildMagnetURI('ABCDEFGHIJKLMNOPQRSTUVWXYZ234567', 'x').startsWith('magnet:?xt=urn:btih:ABCDEFGHIJKLMNOPQRSTUVWXYZ234567')).toBe(true)
     expect(buildMagnetURI('gid-123', 'x')).toBe('')
     expect(buildMagnetURI('', 'x')).toBe('')
+  })
+})
+
+describe('classifyInput', () => {
+  it('routes magnets and torrent files to the bt branch', () => {
+    expect(classifyInput('magnet:?xt=urn:btih:08ada5a7a6183aae1e09d831df6748d566095a10')).toBe('magnet')
+    expect(classifyInput('D:\\downloads\\sample.torrent')).toBe('torrent')
+    expect(classifyInput('/tmp/sample.TORRENT')).toBe('torrent')
+  })
+  it('routes direct media and ftp links away from video probing', () => {
+    expect(classifyInput('https://example.com/movie.mp4?token=1')).toBe('http')
+    expect(classifyInput('https://example.com/archive.zip')).toBe('http')
+    expect(classifyInput('ftp://mirror.example.org/ubuntu.iso')).toBe('ftp')
+  })
+  it('marks non-direct http(s) urls as web for yt-dlp probing', () => {
+    expect(classifyInput('https://www.youtube.com/watch?v=abc')).toBe('web')
+    expect(classifyInput('https://example.com/page')).toBe('web')
+  })
+  it('routes metalink files by extension', () => {
+    expect(classifyInput('D:\\iso\\ubuntu.metalink')).toBe('metalink')
+    expect(classifyInput('/iso/ubuntu.meta4')).toBe('metalink')
+  })
+  it('rejects empty and unknown inputs', () => {
+    expect(classifyInput('   ')).toBe('unknown')
+    expect(classifyInput('just some text')).toBe('unknown')
+  })
+})
+
+describe('stableKey', () => {
+  it('produces a stable sha1 key independent of surrounding whitespace', () => {
+    const expected = createHash('sha1').update('https://example.com/a.mp4').digest('hex')
+    expect(stableKey('https://example.com/a.mp4')).toBe(expected)
+    expect(stableKey('  https://example.com/a.mp4  ')).toBe(expected)
+  })
+})
+
+describe('parseMetalink', () => {
+  it('extracts file names and mirror urls', () => {
+    const xml = '<metalink xmlns="urn:ietf:params:xml:ns:metalink"><file name="ubuntu.iso"><url priority="1">https://mirror-a.example/ubuntu.iso</url><url priority="2">https://mirror-b.example/ubuntu.iso</url></file><file name="notes.txt"><url>ftp://mirror-c.example/notes.txt</url></file></metalink>'
+    const entries = parseMetalink(xml)
+    expect(entries).toHaveLength(2)
+    expect(entries[0].name).toBe('ubuntu.iso')
+    expect(entries[0].urls).toEqual(['https://mirror-a.example/ubuntu.iso', 'https://mirror-b.example/ubuntu.iso'])
+    expect(entries[1].urls).toEqual(['ftp://mirror-c.example/notes.txt'])
+  })
+  it('reads url text when the element carries attributes', () => {
+    const xml = '<metalink><file name="a.iso"><url location="US">https://mirror.example/a.iso</url></file></metalink>'
+    expect(parseMetalink(xml)[0].urls).toEqual(['https://mirror.example/a.iso'])
+  })
+  it('throws for invalid xml', () => {
+    expect(() => parseMetalink('not xml <<')).toThrow()
   })
 })

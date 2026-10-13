@@ -4,9 +4,12 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { app } from 'electron'
 import { join, basename, dirname, isAbsolute, relative, resolve } from 'path'
 import { createHash, randomBytes } from 'crypto'
+import { XMLParser } from 'fast-xml-parser'
 import { logger } from './logger'
 import { writeJsonAtomic } from './storage'
-import type { TorrentFileInfo, TorrentStatus } from '../src/types'
+import { clearDetectCache, detectBinary, detectJsRuntime, jsRuntimeArg, parseProgressLine, probeVideoSite, spawnYtdlpDownload, videoFormat, type VideoProbe } from './ytdlp-engine'
+import type { ChildProcess } from 'child_process'
+import type { TaskProtocol, TorrentFileInfo, TorrentStatus } from '../src/types'
 
 const VIDEO_EXTENSIONS = ['.mp4', '.mkv', '.avi', '.mov', '.webm', '.flv', '.wmv', '.m4v', '.ts', '.rmvb']
 const AUDIO_EXTENSIONS = ['.mp3', '.flac', '.wav', '.aac', '.ogg', '.m4a', '.wma']
@@ -39,6 +42,53 @@ const DEFAULT_TRACKERS = [
 type RpcResponse<T> = { result?: T; error?: { code: number; message: string } }
 type AriaFile = { index: string; path: string; length: string; completedLength: string; selected: string }
 type AriaStatus = { gid: string; status: string; totalLength: string; completedLength: string; downloadSpeed: string; uploadSpeed: string; uploadLength?: string; connections: string; dir: string; errorMessage?: string; bittorrent?: { infoHash?: string; info?: { name?: string } }; info?: string; followedBy?: string[]; belongsTo?: string; files?: AriaFile[] }
+
+// 带 cookies 时使用的 YouTube 客户端：web_embedded 可给到 4K（vp9/av01），对部分视频不可用时
+// yt-dlp 会自动回退到列表里的 web_safari（最高 1080p 的 HLS 单文件）。默认客户端在登录会话下只返回 360p
+const DEFAULT_COOKIE_CLIENT = 'web_embedded,web_safari'
+
+// URL 以这些扩展名结尾时按直链处理，不再交给 yt-dlp 探测（网页类 URL 才走视频站点解析）
+const DIRECT_MEDIA_EXTENSIONS = [...VIDEO_EXTENSIONS, ...AUDIO_EXTENSIONS, '.zip', '.rar', '.7z', '.gz', '.iso', '.exe', '.apk', '.dmg', '.pdf', '.epub', '.txt', '.xml', '.json']
+
+export type InputKind = 'magnet' | 'torrent' | 'metalink' | 'http' | 'ftp' | 'web' | 'unknown'
+// 输入分流：决定任务走 BT、直链还是视频站点解析（web = http(s) 但非明显直链，需 yt-dlp 探测）
+export function classifyInput(input: string): InputKind {
+  const value = input.trim()
+  if (!value) return 'unknown'
+  if (/^magnet:\?/i.test(value)) return 'magnet'
+  const path = value.toLowerCase().split(/[?#]/)[0]
+  if (path.endsWith('.torrent')) return 'torrent'
+  if (path.endsWith('.metalink') || path.endsWith('.meta4')) return 'metalink'
+  if (/^https?:\/\//i.test(value)) return DIRECT_MEDIA_EXTENSIONS.some((ext) => path.endsWith(ext)) ? 'http' : 'web'
+  if (/^ftp:\/\//i.test(value)) return 'ftp'
+  return 'unknown'
+}
+
+// 非 BT 任务的稳定 key：sha1(source)。aria2 重启后 gid 会变，sha1 保证恢复后任务身份不变
+function stableKey(source: string) { return createHash('sha1').update(source.trim()).digest('hex') }
+
+// 直链任务展示名：URL 路径最后一段（解码后），取不到时用整个 URL
+function directName(url: string) {
+  try { const last = new URL(url).pathname.split('/').filter(Boolean).pop(); return last ? decodeURIComponent(last) : url } catch { return url }
+}
+
+// 与 yt-dlp 的 Windows 文件名清理近似：替换非法字符与首尾点空格；最终路径以 after_move:filepath 为准
+function sanitizeFilename(name: string, ext?: string) {
+  const clean = name.replace(/[\\/:*?"<>|\p{Cc}]/gu, '_').replace(/[. ]+$/, '').trim() || 'video'
+  return ext ? `${clean}.${ext}` : clean
+}
+
+// Metalink XML → 文件条目（名称 + 镜像 URL 列表）；name 是 <file> 的属性，<url> 带属性时取 #text
+function parseMetalink(xml: string): Array<{ name: string; urls: string[] }> {
+  let parsed: { metalink?: { file?: unknown }; file?: unknown }
+  try { parsed = new XMLParser({ ignoreAttributes: false }).parse(xml) } catch { throw new Error('无效的 metalink 文件') }
+  const container = (parsed.metalink || parsed) as { file?: unknown }
+  const rawFiles = Array.isArray(container.file) ? container.file : container.file ? [container.file] : []
+  return rawFiles.map((file: { '@_name'?: unknown; name?: unknown; url?: unknown }) => ({
+    name: typeof file['@_name'] === 'string' ? file['@_name'] : typeof file.name === 'string' ? file.name : '',
+    urls: (Array.isArray(file.url) ? file.url : file.url ? [file.url] : []).map((url: unknown) => typeof url === 'string' ? url : typeof (url as { '#text'?: unknown })?.['#text'] === 'string' ? String((url as { '#text': unknown })['#text']) : '').filter(Boolean)
+  }))
+}
 
 function getFileType(filename: string): TorrentFileInfo['type'] { const ext = filename.toLowerCase().slice(filename.lastIndexOf('.')); if (VIDEO_EXTENSIONS.includes(ext)) return 'video'; if (AUDIO_EXTENSIONS.includes(ext)) return 'audio'; if (SUBTITLE_EXTENSIONS.includes(ext)) return 'subtitle'; return 'other' }
 function getErrorMessage(error: unknown) { return error instanceof Error ? error.message : String(error) }
@@ -118,16 +168,32 @@ class TorrentEngine {
   private refreshing = false
   // 任务由“下载中”转为“已完成”时的回调（RSS 下载完成桌面通知用）
   private completeListener: ((infoHash: string, name: string) => void) | null = null
+  // 全局状态广播：跨会话恢复的任务没有 per-task callback，靠它保证状态实时推送
+  private globalListener: ((status: TorrentStatus) => void) | null = null
   private downloadDirOverride = ''
   private trackerOverride = ''
   private maxConcurrent = 0
   private speedLimit = ''
-  // 任务持久化：hash -> 任务来源（磁力链接 / .torrent 路径），done 表示已完整下载过
-  private taskSources = new Map<string, { source: string; done: boolean }>()
+  // aria2 RPC 无响应计数（refreshStatuses 每秒一次，连续 10 次触发强制重启）
+  private rpcFailCount = 0
+  // 直链下载每服务器连接数（设置页可调，上限 16）
+  private httpSplit = 8
+  // yt-dlp 可执行文件路径（设置页指定；空则从 PATH 查找）
+  private ytdlpPath = ''
+  // 代理地址（http/socks）：仅直链与视频站点使用，BT/DHT 不走代理
+  private proxy = ''
+  // yt-dlp 的 cookies 来源浏览器（用户登录 YouTube 的浏览器；空则不带 cookies）
+  private cookiesBrowser = ''
+  // 任务持久化：key -> 任务来源。BT 用 infoHash，直链/视频任务用 sha1(source)；type 缺省 bt
+  private taskSources = new Map<string, { source: string; done: boolean; type: TaskProtocol; name?: string; client?: string; noCookies?: boolean; filePath?: string }>()
+  // 直链/视频任务的展示名（URL 文件名、视频标题）；BT 任务名来自 metadata
+  private taskNames = new Map<string, string>()
+  // yt-dlp 下载进程：任务 key -> 进程
+  private videoProcs = new Map<string, ChildProcess>()
   private tasksFile = () => join(app.getPath('userData'), 'tasks.json')
 
   // 设置页写入的持久化配置：未启动时仅记录（spawn 时生效），已启动则热应用到 aria2
-  configure(options: { downloadDir?: string; trackers?: string; maxConcurrentDownloads?: number; speedLimit?: string }) {
+  configure(options: { downloadDir?: string; trackers?: string; maxConcurrentDownloads?: number; speedLimit?: string; httpSplit?: number; ytdlpPath?: string; proxy?: string; ytdlpBrowser?: string }) {
     if (options.downloadDir) {
       this.downloadDirOverride = options.downloadDir
       mkdirSync(options.downloadDir, { recursive: true })
@@ -143,11 +209,24 @@ class TorrentEngine {
       this.speedLimit = options.speedLimit
       if (this.serverPort) void this.rpc('changeGlobalOption', [{ 'max-overall-download-limit': options.speedLimit }]).catch((e) => logger.error('configure', 'speed-limit failed: ' + getErrorMessage(e)))
     }
+    // 直链分片数（每服务器连接数上限 16）；热应用对后续任务生效
+    if (options.httpSplit && options.httpSplit > 0) {
+      this.httpSplit = Math.min(16, Math.floor(options.httpSplit))
+      if (this.serverPort) void this.rpc('changeGlobalOption', [{ split: String(this.httpSplit), 'max-connection-per-server': String(this.httpSplit) }]).catch((e) => logger.error('configure', 'http-split failed: ' + getErrorMessage(e)))
+    }
+    if (options.ytdlpPath !== undefined && options.ytdlpPath !== this.ytdlpPath) {
+      this.ytdlpPath = options.ytdlpPath
+      clearDetectCache()
+    }
+    if (options.proxy !== undefined) this.proxy = options.proxy.trim()
+    if (options.ytdlpBrowser !== undefined) this.cookiesBrowser = options.ytdlpBrowser.trim()
   }
 
   effectiveDownloadDir() { return this.downloadDirOverride || this.dataDir || join(app.getPath('userData'), 'aria2-downloads') }
 
   onTorrentComplete(listener: (infoHash: string, name: string) => void) { this.completeListener = listener }
+
+  onStatusBroadcast(listener: (status: TorrentStatus) => void) { this.globalListener = listener }
 
   private persistTasks() {
     try { writeJsonAtomic(this.tasksFile(), { tasks: [...this.taskSources].map(([hash, task]) => ({ hash, ...task })) }, 2) } catch (error) { logger.error('tasks', `persist failed: ${getErrorMessage(error)}`) }
@@ -155,12 +234,32 @@ class TorrentEngine {
 
   private restoreTasks() {
     try {
-      const raw = JSON.parse(readFileSync(this.tasksFile(), 'utf8')) as { tasks?: Array<{ hash: string; source: string; done?: boolean }> }
+      const raw = JSON.parse(readFileSync(this.tasksFile(), 'utf8')) as { tasks?: Array<{ hash: string; source: string; type?: TaskProtocol; name?: string; client?: string; noCookies?: boolean; filePath?: string; done?: boolean }> }
       for (const task of raw.tasks || []) {
         if (!task.source || this.taskSources.has(task.hash)) continue
-        this.taskSources.set(task.hash, { source: task.source, done: !!task.done })
+        const type: TaskProtocol = task.type || 'bt'
+        this.taskSources.set(task.hash, { source: task.source, done: !!task.done, type, name: task.name, client: task.client, noCookies: task.noCookies, filePath: task.filePath })
+        if (task.name) this.taskNames.set(task.hash, task.name)
         logger.info('tasks', `restoring ${task.hash}${task.done ? ' (complete)' : ''}`)
-        void this.addTorrent(task.source, undefined, { wait: false }).catch((error) => {
+        if (type === 'video') {
+          // 视频任务重启后登记为暂停态（避免启动即访问第三方站点）；已完成的任务从磁盘重建文件列表
+          let files: Array<{ index: string; path: string; length: string; completedLength: string; selected: string }> = []
+          let total = '0'
+          let state = 'paused'
+          if (task.done && task.filePath) {
+            try {
+              const size = statSync(task.filePath).size
+              files = [{ index: '1', path: task.filePath, length: String(size), completedLength: String(size), selected: 'true' }]
+              total = String(size)
+              state = 'complete'
+            } catch { /* 文件已被移走：保持暂停态，用户可重新下载 */ }
+          }
+          this.applyStatus(task.hash, { gid: task.hash, status: state, totalLength: total, completedLength: total, downloadSpeed: '0', uploadSpeed: '0', connections: '0', dir: this.dataDir, files })
+          continue
+        }
+        // 按持久化的类型直连恢复：web 类直链不再重复走 yt-dlp 探测
+        const restore = type === 'bt' ? this.addTask(task.source, undefined, { wait: false }) : this.addDirect([task.source], undefined, { name: task.name })
+        void restore.catch((error) => {
           logger.error('tasks', `restore failed for ${task.hash}: ${getErrorMessage(error)}`)
           this.taskSources.delete(task.hash)
           this.persistTasks()
@@ -257,6 +356,339 @@ class TorrentEngine {
     return body.result
   }
 
+  // 统一任务入口：按输入类型分流到 BT / 直链 / Metalink / 视频站点
+  async addTask(input: string, onStatus?: (status: TorrentStatus) => void, opts: { wait?: boolean; dir?: string } = {}): Promise<TorrentStatus> {
+    const kind = classifyInput(input)
+    if (kind === 'magnet' || kind === 'torrent') return this.addTorrent(input, onStatus, opts)
+    if (kind === 'metalink') return this.addMetalinkFile(input, onStatus, opts)
+    if (kind === 'http' || kind === 'ftp') return this.addDirect([input.trim()], onStatus, opts)
+    if (kind === 'web') {
+      // 网页类 URL：yt-dlp 可用时先探测视频站点，探测失败（普通网页/网络错误）回退直链下载
+      const url = input.trim()
+      const probe = await this.probeVideo(url)
+      if (probe) {
+        // 同一 URL 之前被误回退为直链任务时：移除旧记录（含误下的 HTML 页面），重建为视频任务
+        const key = stableKey(url)
+        const existing = this.taskSources.get(key)
+        if (existing && existing.type !== 'video') {
+          logger.info('tasks', `rebuilding ${key.slice(0, 8)} as video task (was ${existing.type})`)
+          await this.removeTorrent(key, true).catch(() => undefined)
+        }
+        return this.addVideo(url, probe, onStatus, opts)
+      }
+      return this.addDirect([url], onStatus, opts)
+    }
+    throw new Error('请输入磁力链接、.torrent/.metalink 文件或 http(s)/ftp 下载链接')
+  }
+
+  // yt-dlp 查找顺序：设置路径 > 应用内自动安装目录（userData/bin）> 系统 PATH
+  private resolveYtdlp(): Promise<string | null> {
+    return detectBinary(this.ytdlpPath || undefined, 'yt-dlp', join(app.getPath('userData'), 'bin'))
+  }
+
+  // JS 运行时（deno/node/bun）：yt-dlp 解 YouTube n 签名挑战所需，缺失时带 cookies 的会话会失败
+  private async resolveJsRuntime(): Promise<string | undefined> {
+    return jsRuntimeArg(await detectJsRuntime(join(app.getPath('userData'), 'bin')))
+  }
+
+  // 视频站点探测：按降级序列尝试——用户 cookies（web_safari 客户端）→ 无 cookies → 间隔重试 → android 保底
+  // 关键：登录会话下必须显式指定 web_safari 客户端，默认客户端会降级到 360p；n 签名挑战需要 JS 运行时
+  private async probeVideo(url: string): Promise<VideoProbe | null> {
+    const binary = await this.resolveYtdlp()
+    if (!binary) return null
+    const cookies = this.cookiesBrowser || undefined
+    const jsRuntime = await this.resolveJsRuntime()
+    const base = { proxy: this.proxy || undefined, jsRuntime }
+    // 已知视频站点域名：probe 失败时不回退直链（只会下载到 HTML 页面）
+    const isVideoSite = /(?:youtube\.com|youtu\.be|bilibili\.com|b23\.tv)/i.test(url)
+    const clean = (line: string) => line.replace(/^ERROR:\s*/, '').replace(/^\[[a-z]+\]\s*\S+:\s*/, '')
+    const attempts: Array<{ cookiesBrowser?: string; client?: string; delay: number }> = [
+      // 带 cookies 用 web_embedded,web_safari：可拿 4K，web_embedded 不可用时自动回退 web_safari(1080p)
+      ...(cookies ? [{ cookiesBrowser: cookies, client: DEFAULT_COOKIE_CLIENT, delay: 0 }] : []),
+      // 无 cookies（cookies 会话异常可能是失败源）；匿名默认客户端可拿到完整 DASH（含 1080p）
+      { cookiesBrowser: undefined, delay: 5000 },
+      // 默认客户端间隔重试：YouTube 的风控/格式受限状态会持续数十秒到几分钟，拉长窗口覆盖它
+      // （android 客户端只有 360p，留作最后保底）
+      { cookiesBrowser: undefined, delay: 10000 },
+      { cookiesBrowser: undefined, delay: 20000 },
+      { cookiesBrowser: undefined, delay: 30000 },
+      { cookiesBrowser: undefined, client: 'android', delay: 5000 },
+      { cookiesBrowser: undefined, client: 'android', delay: 10000 }
+    ]
+    let lastError = ''
+    let sawBotCheck = false
+    let sawCookieFail = false
+    for (let i = 0; i < attempts.length; i++) {
+      const { delay, ...attemptOpts } = attempts[i]
+      if (delay) await new Promise((resolve) => setTimeout(resolve, delay))
+      const result = await probeVideoSite(binary, url, { ...base, ...attemptOpts })
+      if (result.cookieFail) { sawCookieFail = true; continue }
+      if (result.probe && !result.restricted) {
+        if (sawCookieFail) logger.warn('ytdlp', 'cookies unavailable (browser locked?), proceeding without cookies')
+        if (!attempts[i].cookiesBrowser) result.probe.noCookies = true
+        return result.probe
+      }
+      sawBotCheck = sawBotCheck || result.botCheck
+      lastError = result.errorLine || lastError
+    }
+    if (sawCookieFail) logger.warn('ytdlp', 'cookies unavailable (browser locked?), proceeding without cookies')
+    if (sawBotCheck) throw new Error('YouTube 要求登录验证：请在设置页选择已登录 YouTube 的浏览器（Cookies）后重试')
+    if (lastError && /video unavailable|private video|removed|not available|terminated|copyright/i.test(lastError)) {
+      throw new Error(clean(lastError) || '视频不可用')
+    }
+    if (isVideoSite) throw new Error('视频解析失败：' + (clean(lastError) || '站点返回异常，请稍后重试'))
+    return null
+  }
+
+  // 直链下载（HTTP/HTTPS/FTP）：uris 为同一资源的多个镜像，aria2 会自动切换
+  private async addDirect(uris: string[], onStatus?: (status: TorrentStatus) => void, opts: { dir?: string; name?: string } = {}) {
+    await this.startServer()
+    const url = uris[0]
+    const key = stableKey(url)
+    const existing = this.statuses.get(key)
+    if (existing) {
+      if (onStatus) this.callbacks.set(key, onStatus)
+      return this.toTorrentStatus(key, existing)
+    }
+    const type: TaskProtocol = /^ftp:\/\//i.test(url) ? 'ftp' : 'http'
+    // 直链任务走代理（设置页配置）；BT/DHT 不走代理，故不设全局
+    const options = { split: String(this.httpSplit), 'max-connection-per-server': String(this.httpSplit), 'min-split-size': '1M', ...(this.proxy ? { 'all-proxy': this.proxy } : {}), ...(opts.dir ? { dir: opts.dir } : {}) }
+    const gid = await this.rpc<string>('addUri', [uris, options])
+    // 保留已有条目的 done/name（aria2 重启恢复已完成任务时不丢标记）
+    const prevTask = this.taskSources.get(key)
+    this.taskSources.set(key, { source: url, done: prevTask?.done || false, type, name: opts.name || prevTask?.name })
+    this.taskNames.set(key, opts.name || prevTask?.name || directName(url))
+    this.persistTasks()
+    const status = await this.refreshGid(gid, key, onStatus)
+    return this.toTorrentStatus(key, status)
+  }
+
+  // Metalink：本地解析 XML，每个 <file> 展开为一个直链任务（多 <url> 作为镜像交给 aria2 切换）
+  private async addMetalinkFile(input: string, onStatus?: (status: TorrentStatus) => void, opts: { dir?: string } = {}) {
+    let xml: string
+    try { xml = readFileSync(input.trim(), 'utf8') } catch { throw new Error('无法读取 metalink 文件') }
+    const entries = parseMetalink(xml)
+    if (!entries.length) throw new Error('metalink 文件中没有可下载的条目')
+    const first: TorrentStatus[] = []
+    for (const entry of entries) {
+      const urls = entry.urls.filter((url) => /^(https?|ftp):\/\//i.test(url))
+      if (!urls.length) continue
+      first.push(await this.addDirect(urls, onStatus, { ...opts, name: entry.name || undefined }))
+    }
+    if (!first.length) throw new Error('metalink 条目中没有有效的 http(s)/ftp 链接')
+    return first[0]
+  }
+
+  // 视频站点任务：yt-dlp 解析标题与大小，下载进程的 stdout 映射为任务进度
+  private async addVideo(url: string, probe: VideoProbe, onStatus?: (status: TorrentStatus) => void, opts: { dir?: string } = {}) {
+    await this.startServer()
+    const key = stableKey(url)
+    const existing = this.statuses.get(key)
+    if (existing) {
+      if (onStatus) this.callbacks.set(key, onStatus)
+      return this.toTorrentStatus(key, existing)
+    }
+    const dir = opts.dir || this.dataDir
+    this.taskSources.set(key, { source: url, done: false, type: 'video', name: probe.title, client: probe.client, noCookies: probe.noCookies })
+    this.taskNames.set(key, probe.title)
+    this.persistTasks()
+    // 合成与 aria2 一致的状态结构，复用推送、展示与持久化链路
+    this.applyStatus(key, { gid: key, status: 'active', totalLength: String(probe.size || 0), completedLength: '0', downloadSpeed: '0', uploadSpeed: '0', connections: '1', dir, files: [{ index: '1', path: join(dir, sanitizeFilename(probe.title, probe.ext)), length: String(probe.size || 0), completedLength: '0', selected: 'true' }] })
+    if (onStatus) this.callbacks.set(key, onStatus)
+    this.startVideoDownload(key, url, dir)
+    return this.toTorrentStatus(key, this.statuses.get(key)!)
+  }
+
+  // attempt 记录降级进度：useCookies（本次是否带 cookies）→ client（android 兜底）→ retries（间隔重试）
+  private startVideoDownload(key: string, url: string, dir: string, attempt: { useCookies?: boolean; client?: string; retries?: number } = {}) {
+    void (async () => {
+      const binary = await this.resolveYtdlp()
+      const status = this.statuses.get(key)
+      if (!status) return
+      // applyStatus 以内容比较去重：必须传新对象，原地 mutate 会被判定为无变化而不推送
+      if (!binary) { this.applyStatus(key, { ...status, status: 'error', errorMessage: '未找到 yt-dlp，可在设置中自动安装或配置路径' }); return }
+      // ffmpeg 检测含应用内安装目录（userData/bin）；无 ffmpeg 时只能选预合并的单文件格式
+      const ffmpegBinary = await detectBinary(undefined, 'ffmpeg', join(app.getPath('userData'), 'bin'))
+      const format = videoFormat(!!ffmpegBinary)
+      // ffmpeg 不在 PATH 时（应用内安装），显式告知 yt-dlp 合并工具位置
+      const ffmpegLocation = ffmpegBinary ? dirname(ffmpegBinary) : undefined
+      const jsRuntime = await this.resolveJsRuntime()
+      const task = this.taskSources.get(key)
+      // probe 阶段确定的配置（client / 是否带 cookies）；重试可覆盖
+      const useCookies = attempt.useCookies ?? (!task?.noCookies && !!this.cookiesBrowser)
+      const cookiesBrowser = useCookies ? this.cookiesBrowser || undefined : undefined
+      // 带 cookies 时用 web_embedded,web_safari：web_embedded 能给到 4K（vp9/av01），
+      // 但它对部分视频不可用，此时自动回退到 web_safari（最高 1080p 的 HLS 单文件）。
+      // 去 cookies 后必须同时去掉该客户端（匿名会话用默认客户端才能拿到完整 DASH）
+      const client = attempt.client ?? (useCookies ? task?.client || DEFAULT_COOKIE_CLIENT : undefined)
+      // 音视频分流下载时进度会回跳，按当前流的最大值展示保证单调
+      let maxPercent = 0
+      const child = spawnYtdlpDownload(binary, url, dir, format, {
+        onLine: (line) => {
+          const current = this.statuses.get(key)
+          if (!current) return
+          const progress = parseProgressLine(line)
+          if (progress) {
+            maxPercent = Math.max(maxPercent, progress.percent)
+            const total = progress.totalSize || toNumber(current.totalLength)
+            const completed = Math.round(total * maxPercent / 100)
+            // 文件级进度同步更新：列表页按 files[].completed/size 渲染，不更新会一直显示 0%
+            const files = current.files?.length ? [{ ...current.files[0], length: String(total), completedLength: String(completed) }] : current.files
+            this.applyStatus(key, { ...current, status: 'active', totalLength: String(total), completedLength: String(completed), files, ...(progress.speed ? { downloadSpeed: String(Math.round(progress.speed)) } : {}) })
+          } else if (/^\[download\]\s+Destination:/i.test(line)) {
+            // 新的流（视频→音频）开始：进度重置；恢复的任务此时补齐文件占位
+            maxPercent = 0
+            const dest = line.replace(/^\[download\]\s+Destination:\s*/i, '').trim()
+            if (dest) {
+              const files = current.files?.length ? [{ ...current.files[0], path: dest }] : [{ index: '1', path: dest, length: current.totalLength, completedLength: '0', selected: 'true' }]
+              this.applyStatus(key, { ...current, files })
+            }
+          } else if (/^(?:[A-Za-z]:[\\/]|\/)/.test(line)) {
+            // --print after_move:filepath 的最终路径：修正预期文件名（yt-dlp 会清理非法字符）
+            // 恢复的任务 files 为空（秒完成时没有 Destination 行），这里必须创建条目
+            const finalPath = line.trim()
+            const files = current.files?.length ? [{ ...current.files[0], path: finalPath }] : [{ index: '1', path: finalPath, length: current.totalLength, completedLength: current.completedLength, selected: 'true' }]
+            this.taskNames.set(key, basename(finalPath))
+            const task = this.taskSources.get(key)
+            if (task && task.filePath !== finalPath) { task.filePath = finalPath; this.persistTasks() }
+            this.applyStatus(key, { ...current, files })
+          }
+        },
+        onExit: (code, tail) => {
+          this.videoProcs.delete(key)
+          const current = this.statuses.get(key)
+          if (!current) return
+          if (code === 0) {
+            // 成功后以磁盘上的真实文件为准：DASH 分流下载时进度里的 totalLength 只是单条流的大小，
+            // 合并后的成品大小需重新 stat；同时补齐文件级 length/completedLength，列表页才会显示 100%
+            const filePath = current.files?.[0]?.path
+            let size = toNumber(current.totalLength) || toNumber(current.completedLength)
+            if (filePath) { try { size = statSync(filePath).size } catch { /* 文件已被移走时沿用进度值 */ } }
+            const files = current.files?.length
+              ? [{ ...current.files[0], length: String(size), completedLength: String(size) }]
+              : filePath ? [{ index: '1', path: filePath, length: String(size), completedLength: String(size), selected: 'true' }] : current.files
+            this.applyStatus(key, { ...current, status: 'complete', totalLength: String(size), completedLength: String(size), downloadSpeed: '0', files })
+            return
+          }
+          if (current.status === 'paused') return
+          const tailAll = tail || ''
+          const tailLine = tailAll.trim().split('\n').pop() || ''
+          const step = (patch: { useCookies?: boolean; client?: string; retries?: number }) => this.startVideoDownload(key, url, dir, { ...attempt, ...patch })
+          // 降级序列与 probe 一致：cookies 失效/读取失败 → 去 cookies → android 客户端 → 间隔重试
+          if (/cookie|dpapi/i.test(tailAll) && useCookies) {
+            logger.info('ytdlp', `cookies unavailable on ${key.slice(0, 8)}, retrying without cookies`)
+            step({ useCookies: false })
+            return
+          }
+          // 站点错误（视频不可用等）：带 cookies 时的失败可能是 cookies 会话异常导致，去 cookies 重试一次
+          if (/video unavailable|private video|removed|not available|terminated|copyright/i.test(tailLine) && useCookies) {
+            logger.info('ytdlp', `site error on ${key.slice(0, 8)}, retrying without cookies`)
+            step({ useCookies: false })
+            return
+          }
+          // 风控/格式受限统一降级：默认客户端间隔重试优先（随机触发，重试常能过），android 只有 360p 留作保底
+          if (/sign in to confirm/i.test(tailAll) || tailLine.includes('Requested format is not available')) {
+            const isBotCheck = /sign in to confirm/i.test(tailAll)
+            const label = isBotCheck ? 'bot check' : 'format restricted'
+            if (useCookies) {
+              logger.info('ytdlp', `${label} on ${key.slice(0, 8)}, retrying without cookies`)
+              step({ useCookies: false })
+              return
+            }
+            if (!attempt.client) {
+              const retries = attempt.retries || 0
+              if (retries < 4) {
+                const delay = [10000, 20000, 30000, 60000][retries]
+                logger.info('ytdlp', `${label} on ${key.slice(0, 8)}, retry ${retries + 1}/4 in ${delay / 1000}s`)
+                // 重试等待期显示"连接中"，避免任务看起来假死在"下载中 0%"
+                this.applyStatus(key, { ...current, status: 'connecting' })
+                setTimeout(() => step({ retries: retries + 1 }), delay)
+                return
+              }
+              logger.info('ytdlp', `${label} persists on ${key.slice(0, 8)}, falling back to android client (360p)`)
+              step({ client: 'android', retries: 0 })
+              return
+            }
+            const retries = attempt.retries || 0
+            if (retries < 1) {
+              logger.info('ytdlp', `${label} persists on android ${key.slice(0, 8)}, retry 1/1 in 15s`)
+              this.applyStatus(key, { ...current, status: 'connecting' })
+              setTimeout(() => step({ retries: retries + 1 }), 15000)
+              return
+            }
+            if (isBotCheck) this.applyStatus(key, { ...current, status: 'error', errorMessage: 'YouTube 要求登录验证：请在设置页选择已登录 YouTube 的浏览器（Cookies）后重试' })
+            else {
+              void (async () => {
+                const hasFfmpeg = !!(await detectBinary(undefined, 'ffmpeg', join(app.getPath('userData'), 'bin')))
+                const hasJsRuntime = !!(await detectJsRuntime(join(app.getPath('userData'), 'bin')))
+                const current = this.statuses.get(key)
+                if (!current) return
+                this.applyStatus(key, { ...current, status: 'error', errorMessage: !hasJsRuntime
+                  ? '视频格式受限：缺少 JS 运行时（deno/node），无法解 YouTube 签名挑战，请在设置页一键安装 deno'
+                  : hasFfmpeg
+                    ? '视频格式暂时受限：多次重试后仍无可下载格式，请稍后点“恢复”重试'
+                    : '视频格式受限：该资源没有音视频合一的格式，需要安装 ffmpeg 合并分离流（设置页可一键安装）' })
+              })()
+            }
+            return
+          }
+          this.applyStatus(key, { ...current, status: 'error', errorMessage: tailLine ? `yt-dlp 退出码 ${code}：${tailLine}` : `yt-dlp 退出码 ${code}` })
+        },
+        onError: (error) => {
+          this.videoProcs.delete(key)
+          const current = this.statuses.get(key)
+          if (!current) return
+          this.applyStatus(key, { ...current, status: 'error', errorMessage: getErrorMessage(error) })
+        }
+      }, { proxy: this.proxy || undefined, ffmpegLocation, cookiesBrowser, client, jsRuntime })
+      this.videoProcs.set(key, child)
+    })()
+  }
+
+  private pauseVideo(key: string) {
+    const status = this.statuses.get(key)
+    if (status) this.applyStatus(key, { ...status, status: 'paused', downloadSpeed: '0' })
+    const child = this.videoProcs.get(key)
+    if (child) { child.kill(); this.videoProcs.delete(key) }
+  }
+
+  private resumeVideo(key: string) {
+    const task = this.taskSources.get(key)
+    const status = this.statuses.get(key)
+    if (!task || !status) throw new Error('下载任务不存在')
+    if (status.status === 'complete') return
+    this.applyStatus(key, { ...status, status: 'active' })
+    this.startVideoDownload(key, task.source, status.dir || this.dataDir)
+  }
+
+  // ffmpeg 等依赖就绪后调用：自动重试所有出错的视频任务
+  retryErroredVideos() {
+    for (const [key, task] of this.taskSources) {
+      if (task.type !== 'video') continue
+      const status = this.statuses.get(key)
+      if (status?.status === 'error') {
+        logger.info('ytdlp', `auto-retrying errored video task ${key.slice(0, 8)}`)
+        this.resumeVideo(key)
+      }
+    }
+  }
+
+  private removeVideo(key: string, destroy: boolean) {
+    const child = this.videoProcs.get(key)
+    if (child) { child.kill(); this.videoProcs.delete(key) }
+    const status = this.statuses.get(key)
+    this.statuses.delete(key)
+    this.callbacks.delete(key)
+    this.taskSources.delete(key)
+    this.taskNames.delete(key)
+    this.persistTasks()
+    if (destroy && status) {
+      this.removeTaskFiles(status)
+      // yt-dlp 的 .part 续传文件一并清理
+      for (const file of status.files || []) { try { rmSync(`${file.path}.part`, { force: true }) } catch { /* 清理失败不影响移除 */ } }
+    }
+  }
+
   async addTorrent(torrentId: string, onStatus?: (status: TorrentStatus) => void, opts: { wait?: boolean; dir?: string } = {}) {
     await this.startServer()
     const id = torrentId.trim()
@@ -280,7 +712,7 @@ class TorrentEngine {
       this.gidHashes.set(gid, key)
       if (onStatus) this.callbacks.set(key, onStatus)
     }
-    this.taskSources.set(key, { source: id, done: false })
+    this.taskSources.set(key, { source: id, done: false, type: 'bt' })
     this.persistTasks()
     if (isTorrentFile) return this.toTorrentStatus(key, first)
     if (opts.wait !== false) await this.waitForMetadata(key)
@@ -310,6 +742,12 @@ class TorrentEngine {
 
   async downloadTorrent(infoHash: string, filePaths?: string[]) {
     let status = await this.findStatus(infoHash)
+    const task = this.taskSources.get(infoHash.toLowerCase()) || this.taskSources.get(infoHash)
+    // 视频任务由 yt-dlp 全程管理：未在下载中时重新拉起（续传 .part），无需选择文件
+    if (task?.type === 'video') {
+      if (!this.videoProcs.has(status.gid) && status.status !== 'complete' && status.status !== 'error') this.startVideoDownload(status.gid, task.source, status.dir || this.dataDir)
+      return
+    }
     // 命中的可能是 metadata 父任务（complete、由后续任务接管展示）：转而操作真正的下载任务
     if (status.followedBy?.length) status = await this.refreshGid(status.followedBy[0], infoHash.toLowerCase())
     const files = status.files || []
@@ -327,9 +765,19 @@ class TorrentEngine {
     }
     await this.refreshGid(status.gid, infoHash)
   }
-  async pauseTorrent(infoHash: string) { const status = await this.findStatus(infoHash); await this.rpc('pause', [status.gid]); await this.refreshGid(status.gid, infoHash) }
-  async resumeTorrent(infoHash: string) { const status = await this.findStatus(infoHash); await this.rpc('unpause', [status.gid]); await this.refreshGid(status.gid, infoHash) }
+  async pauseTorrent(infoHash: string) {
+    const status = await this.findStatus(infoHash)
+    if (this.taskSources.get(status.gid)?.type === 'video' || this.taskSources.get(infoHash.toLowerCase())?.type === 'video') return this.pauseVideo(infoHash.toLowerCase())
+    await this.rpc('pause', [status.gid]); await this.refreshGid(status.gid, infoHash)
+  }
+  async resumeTorrent(infoHash: string) {
+    const status = await this.findStatus(infoHash)
+    if (this.taskSources.get(status.gid)?.type === 'video' || this.taskSources.get(infoHash.toLowerCase())?.type === 'video') return this.resumeVideo(infoHash.toLowerCase())
+    await this.rpc('unpause', [status.gid]); await this.refreshGid(status.gid, infoHash)
+  }
   async removeTorrent(infoHash: string, destroy = false) {
+    const task = this.taskSources.get(infoHash.toLowerCase()) || this.taskSources.get(infoHash)
+    if (task?.type === 'video') return this.removeVideo(infoHash.toLowerCase(), destroy)
     const status = await this.findStatus(infoHash)
     const hash = infoHash.toLowerCase()
     // 连带清理同属这个资源的所有 gid（metadata 父任务 + 后续任务），防止移除后子任务以 gid 形式复活
@@ -386,7 +834,19 @@ class TorrentEngine {
     if (this.refreshing) return
     this.refreshing = true
     try {
-      const active = await this.rpc<AriaStatus[]>('tellActive', []).catch(() => [])
+      const active = await this.rpc<AriaStatus[]>('tellActive', []).catch(() => null)
+      // RPC 无响应计数：进程活着但事件循环卡死（CLOSE_WAIT 堆积）时，连续失败约 10 秒强制重启；
+      // exit handler 会自动 respawn 并恢复任务
+      if (active === null) {
+        this.rpcFailCount++
+        if (this.rpcFailCount >= 10 && this.process && !this.destroying) {
+          logger.error('aria2', `RPC 连续 ${this.rpcFailCount} 次无响应，强制重启 aria2`)
+          this.rpcFailCount = 0
+          try { this.process.kill() } catch { /* 进程已退出 */ }
+        }
+        return
+      }
+      this.rpcFailCount = 0
       const waiting = await this.rpc<AriaStatus[]>('tellWaiting', [0, 1000]).catch(() => [])
       const stopped = await this.rpc<AriaStatus[]>('tellStopped', [0, 1000]).catch(() => [])
       for (const status of [...active, ...waiting, ...stopped]) {
@@ -420,7 +880,7 @@ class TorrentEngine {
     if (prev && prev.status !== 'complete' && status.status === 'complete' && task && !task.done) {
       task.done = true
       this.persistTasks()
-      this.completeListener?.(hash, status.bittorrent?.info?.name || status.info || hash)
+      this.completeListener?.(hash, status.bittorrent?.info?.name || this.taskNames.get(hash) || status.info || hash)
     }
     const key = this.taskSources.has(hash) ? hash : this.taskSources.has(hash.toLowerCase()) ? hash.toLowerCase() : ''
     const entry = key ? this.taskSources.get(key)! : undefined
@@ -432,19 +892,23 @@ class TorrentEngine {
     }
     // 内容没有变化时不触发推送，避免渲染层每秒整体重渲染
     if (prev && JSON.stringify(prev) === JSON.stringify(status)) return
-    const listener = this.callbacks.get(hash) || this.callbacks.get(hash.toLowerCase())
+    const listener = this.callbacks.get(hash) || this.callbacks.get(hash.toLowerCase()) || this.globalListener
     if (listener) listener(this.toTorrentStatus(hash, status))
   }
   private async refreshGid(gid: string, hash: string, callback?: (status: TorrentStatus) => void): Promise<AriaStatus> { const status = await this.rpc<AriaStatus>('tellStatus', [gid, ['gid', 'status', 'totalLength', 'completedLength', 'downloadSpeed', 'uploadSpeed', 'connections', 'dir', 'bittorrent', 'followedBy', 'belongsTo', 'files']]); this.gidHashes.set(gid, hash); if (callback) this.callbacks.set(hash, callback); this.applyStatus(hash, status); return status }
   private async findStatus(infoHash: string) { const hash = infoHash.toLowerCase(); const existing = this.statuses.get(hash); if (existing) return existing; await this.refreshStatuses(); const found = this.statuses.get(hash); if (!found) throw new Error('下载任务不存在'); return found }
   private toTorrentStatus(hash: string, status: AriaStatus): TorrentStatus {
+    const task = this.taskSources.get(hash) || this.taskSources.get(hash.toLowerCase())
+    const type: TaskProtocol = task?.type || 'bt'
     const totalSize = toNumber(status.totalLength) || (status.files || []).reduce((sum, file) => sum + toNumber(file.length), 0)
     const downloaded = toNumber(status.completedLength)
     const downloadSpeed = toNumber(status.downloadSpeed)
     const files = (status.files || []).map((file) => ({ name: relative(status.dir || this.dataDir, file.path) || basename(file.path), path: file.path, size: toNumber(file.length), completed: toNumber(file.completedLength), type: getFileType(file.path) }))
-    const name = status.bittorrent?.info?.name || status.info || hash
+    const name = status.bittorrent?.info?.name || this.taskNames.get(hash) || this.taskNames.get(hash.toLowerCase()) || status.info || hash
+    // 磁力链接只对 BT 任务有意义：直链任务的 key 是 sha1(url)，不是 btih 哈希
+    const magnetURI = type === 'bt' ? buildMagnetURI(hash, name, trackerList(this.trackerOverride).split(',')) : ''
     const state: TorrentStatus['status'] = status.status === 'error' ? 'error' : this.metadataGids.has(status.gid) ? 'parsing' : status.status === 'paused' ? 'paused' : status.status === 'complete' ? 'seeding' : status.status === 'active' ? 'downloading' : 'connecting'
-    return { infoHash: hash, name, magnetURI: buildMagnetURI(hash, name, trackerList(this.trackerOverride).split(',')), progress: totalSize ? downloaded / totalSize : 0, downloadSpeed, uploadSpeed: toNumber(status.uploadSpeed), downloaded, totalSize, numPeers: toNumber(status.connections), timeRemaining: downloadSpeed > 0 ? Math.ceil(((totalSize - downloaded) / downloadSpeed) * 1000) : 0, status: state, uploaded: toNumber(status.uploadLength), saveDir: status.dir || '', error: state === 'error' ? status.errorMessage || '任务出错' : undefined, files }
+    return { infoHash: hash, name, magnetURI, progress: totalSize ? downloaded / totalSize : 0, downloadSpeed, uploadSpeed: toNumber(status.uploadSpeed), downloaded, totalSize, numPeers: toNumber(status.connections), timeRemaining: downloadSpeed > 0 ? Math.ceil(((totalSize - downloaded) / downloadSpeed) * 1000) : 0, status: state, uploaded: toNumber(status.uploadLength), saveDir: status.dir || '', type, sourceUrl: type === 'bt' ? undefined : task?.source, error: state === 'error' ? status.errorMessage || '任务出错' : undefined, files }
   }
 
   private handleStream(request: IncomingMessage, response: ServerResponse) {
@@ -506,6 +970,8 @@ class TorrentEngine {
     this.destroying = true
     if (this.timer) clearInterval(this.timer)
     this.timer = null
+    for (const [, child] of this.videoProcs) { try { child.kill() } catch { /* 进程已退出 */ } }
+    this.videoProcs.clear()
     if (this.process) {
       const child = this.process
       await new Promise<void>((resolve) => {
@@ -523,4 +989,4 @@ class TorrentEngine {
 }
 function getMime(filename: string) { const ext = filename.toLowerCase().slice(filename.lastIndexOf('.')); return ({ '.mp4': 'video/mp4', '.webm': 'video/webm', '.mkv': 'video/x-matroska', '.mp3': 'audio/mpeg', '.flac': 'audio/flac', '.wav': 'audio/wav', '.ogg': 'audio/ogg' } as Record<string, string>)[ext] || 'application/octet-stream' }
 export const torrentEngine = new TorrentEngine()
-export { buildMagnetURI, getFileType, infoHashFromMagnet, isUnderRoot, srtToVtt, torrentInfoHash, trackerList }
+export { buildMagnetURI, getFileType, infoHashFromMagnet, isUnderRoot, parseMetalink, srtToVtt, stableKey, torrentInfoHash, trackerList }

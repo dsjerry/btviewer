@@ -9,6 +9,8 @@ import { loadSettings, saveSettings } from './settings'
 import { checkForUpdates, initUpdater, installUpdate } from './updater'
 import { addFeed, checkAllFeeds, checkFeed, downloadFeedItem, getFeeds, removeFeed, startPolling, updateFeed } from './rss'
 import { isUnderRoot } from './torrent-engine'
+import { detectBinary, detectJsRuntime, clearDetectCache } from './ytdlp-engine'
+import { downloadYtDlp, downloadFfmpeg, downloadDeno, updateYtDlp } from './ytdlp-installer'
 import { logger } from './logger'
 import type { TorrentStatus } from '../src/types'
 
@@ -37,6 +39,8 @@ function setupCompleteNotifications() {
     if (loadSettings().notifyOnComplete === false || !Notification.isSupported()) return
     new Notification({ title: 'BTViewer 下载完成', body: name }).show()
   })
+  // 全局状态广播：跨会话恢复的任务（无 per-task callback）也能实时推送进度
+  torrentEngine.onStatusBroadcast(sendStatus)
 }
 
 // 录制会话：渲染层 MediaRecorder 的分片经 IPC 流式写入磁盘，内存不随录制时长增长
@@ -156,7 +160,7 @@ function setupIPC() {
 
   ipcMain.handle('torrent:add', async (_event, torrentId: string) => {
     try {
-      const status = await torrentEngine.addTorrent(torrentId, sendStatus)
+      const status = await torrentEngine.addTask(torrentId, sendStatus)
       return { success: true, data: status }
     } catch (error) {
       return { success: false, error: getErrorMessage(error) }
@@ -200,6 +204,64 @@ function setupIPC() {
   })
 
   ipcMain.handle('torrent:all-status', async () => torrentEngine.getAllStatuses())
+
+  // yt-dlp 可用性检测（设置页展示状态与版本）；同时检测 JS 运行时（解 YouTube 签名挑战所需）
+  ipcMain.handle('ytdlp:check', async (_event, customPath?: string) => {
+    try {
+      const binary = await detectBinary(customPath || undefined, 'yt-dlp', join(app.getPath('userData'), 'bin'))
+      const ffmpeg = binary ? await detectBinary(undefined, 'ffmpeg', join(app.getPath('userData'), 'bin')) : null
+      const jsRuntime = binary ? await detectJsRuntime(join(app.getPath('userData'), 'bin')) : null
+      return { success: true, data: { available: !!binary, path: binary || '', ffmpegAvailable: !!ffmpeg, jsRuntime } }
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) }
+    }
+  })
+
+  // yt-dlp 自动安装：从官方 Release 下载到 userData/bin，进度实时推送渲染层
+  ipcMain.handle('ytdlp:install', async () => {
+    try {
+      const path = await downloadYtDlp(join(app.getPath('userData'), 'bin'), (received, total) => {
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('ytdlp:install-progress', { received, total })
+      })
+      clearDetectCache()
+      return { success: true, data: path }
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) }
+    }
+  })
+
+  // yt-dlp 自更新（-U，仅 exe 版支持）
+  ipcMain.handle('ytdlp:update', async (_event, binaryPath: string) => {
+    try { return { success: true, data: await updateYtDlp(String(binaryPath)) } } catch (error) { return { success: false, error: getErrorMessage(error) } }
+  })
+
+  // ffmpeg 自动安装：gyan.dev 官方构建解压到 userData/bin，进度实时推送；装完自动重试出错的视频任务
+  ipcMain.handle('ffmpeg:install', async () => {
+    try {
+      const path = await downloadFfmpeg(join(app.getPath('userData'), 'bin'), (received, total) => {
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('ffmpeg:install-progress', { received, total })
+      })
+      clearDetectCache()
+      torrentEngine.retryErroredVideos()
+      return { success: true, data: path }
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) }
+    }
+  })
+
+  // deno 自动安装：yt-dlp 解 YouTube 签名挑战所需的 JS 运行时；装完自动重试出错的视频任务
+  ipcMain.handle('deno:install', async () => {
+    try {
+      const path = await downloadDeno(join(app.getPath('userData'), 'bin'), (received, total) => {
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('deno:install-progress', { received, total })
+      })
+      clearDetectCache()
+      torrentEngine.retryErroredVideos()
+      return { success: true, data: path }
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) }
+    }
+  })
 
   ipcMain.handle('torrent:get-stream-url', async (_event, infoHash: string, filePath: string) => {
     return torrentEngine.getStreamUrl(infoHash, filePath)
@@ -299,7 +361,7 @@ function setupIPC() {
     const result = await dialog.showOpenDialog(mainWindow, {
       properties: ['openFile'],
       filters: [
-        { name: 'Torrent Files', extensions: ['torrent'] },
+        { name: 'Torrent / Metalink Files', extensions: ['torrent', 'metalink', 'meta4'] },
         { name: 'All Files', extensions: ['*'] }
       ]
     })
@@ -309,7 +371,7 @@ function setupIPC() {
     }
 
     try {
-      const status = await torrentEngine.addTorrent(result.filePaths[0], sendStatus)
+      const status = await torrentEngine.addTask(result.filePaths[0], sendStatus)
       return { success: true, data: status }
     } catch (error) {
       return { success: false, error: getErrorMessage(error) }
@@ -330,7 +392,7 @@ function setupIPC() {
     saveSettings(next)
     applyNativeTheme(next.theme)
     applyLoginItem(next.launchOnStartup === true)
-    torrentEngine.configure({ downloadDir: next.downloadDir, trackers: next.trackers, maxConcurrentDownloads: next.maxConcurrentDownloads, speedLimit: next.speedLimit })
+    torrentEngine.configure({ downloadDir: next.downloadDir, trackers: next.trackers, maxConcurrentDownloads: next.maxConcurrentDownloads, speedLimit: next.speedLimit, httpSplit: next.httpSplit, ytdlpPath: next.ytdlpPath, proxy: next.proxy, ytdlpBrowser: next.ytdlpBrowser })
     return { success: true, data: { ...next, downloadDir: torrentEngine.effectiveDownloadDir(), logDir: logger.logDir(), launchOnStartup: app.getLoginItemSettings().openAtLogin } }
   })
 
@@ -366,7 +428,7 @@ app.whenReady().then(async () => {
   logger.cleanup()
   const settings = loadSettings()
   applyNativeTheme(settings.theme)
-  torrentEngine.configure({ downloadDir: settings.downloadDir, trackers: settings.trackers, maxConcurrentDownloads: settings.maxConcurrentDownloads, speedLimit: settings.speedLimit })
+  torrentEngine.configure({ downloadDir: settings.downloadDir, trackers: settings.trackers, maxConcurrentDownloads: settings.maxConcurrentDownloads, speedLimit: settings.speedLimit, httpSplit: settings.httpSplit, ytdlpPath: settings.ytdlpPath, proxy: settings.proxy, ytdlpBrowser: settings.ytdlpBrowser })
   setupCompleteNotifications()
   setupIPC()
   try {
