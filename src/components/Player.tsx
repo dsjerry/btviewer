@@ -226,7 +226,7 @@ const Player: React.FC<PlayerProps> = ({ infoHash, file, subtitles, playlist, on
   useEffect(() => {
     const button = recordButtonRef.current
     if (!button) return
-    if (recording) { button.addClass('vjs-btv-recording'); button.controlText('停止录制并保存') } else { button.removeClass('vjs-btv-recording'); button.controlText('把当前播放实时录成 webm 片段') }
+    if (recording) { button.addClass('vjs-btv-recording'); button.controlText('停止录制并保存') } else { button.removeClass('vjs-btv-recording'); button.controlText('开始录制片段') }
   }, [recording, playerReady])
 
   useEffect(() => {
@@ -286,7 +286,7 @@ const Player: React.FC<PlayerProps> = ({ infoHash, file, subtitles, playlist, on
         snapshotButton.addClass('vjs-btv-snapshot')
         addBeforeFullscreen(snapshotButton)
         const recordButton = new BtvControlButton(player, { onClick: () => recordToggleRef.current() })
-        recordButton.controlText('把当前播放实时录成 webm 片段')
+        recordButton.controlText('开始录制片段')
         recordButton.addClass('vjs-btv-record')
         recordButtonRef.current = recordButton
         addBeforeFullscreen(recordButton)

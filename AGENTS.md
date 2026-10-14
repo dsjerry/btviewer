@@ -10,7 +10,7 @@ npm run lint       # eslint
 npm test           # vitest（纯函数单测）
 ```
 
-提交前至少跑 `npm run typecheck` 与 `npm test`。改到 `electron/` 或 `src/services/ipc.ts` 的 IPC 时，需同步更新 `electron/preload.ts` 与 `src/services/ipc.ts` 的类型。
+提交前根据改动范围选择验证：逻辑/类型改动至少跑 `npm run typecheck` 与 `npm test`；仅 CSS/样式调整通常不需要 typecheck 或单元测试，优先在应用/浏览器中检查实际效果，只有涉及构建管线或需验证 CSS 兼容性时再跑 build。改到 `electron/` 或 `src/services/ipc.ts` 的 IPC 时，需同步更新 `electron/preload.ts` 与 `src/services/ipc.ts` 的类型。
 
 ## 结构约定
 

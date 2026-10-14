@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { decodeLine, isRuntimeVersionSupported, jsRuntimeArg, parseProgressLine, parseRuntimeVersion, parseVideoProbe, videoFormat } from '../electron/ytdlp-engine'
+import { binaryVersionArgs, decodeLine, isRuntimeVersionSupported, jsRuntimeArg, parseProgressLine, parseRuntimeVersion, parseVideoProbe, videoFormat } from '../electron/ytdlp-engine'
+
+describe('binaryVersionArgs', () => {
+  it('uses ffmpeg’s single-dash version flag and yt-dlp’s double-dash flag', () => {
+    expect(binaryVersionArgs('ffmpeg')).toEqual(['-version'])
+    expect(binaryVersionArgs('yt-dlp')).toEqual(['--version'])
+  })
+})
 
 describe('parseProgressLine', () => {
   it('parses percent, total size, speed and eta', () => {

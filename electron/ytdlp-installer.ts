@@ -5,6 +5,7 @@ import { copyFileSync, createWriteStream, existsSync, mkdirSync, readdirSync, rm
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { randomBytes } from 'crypto'
+import { isBinaryUsable } from './ytdlp-engine'
 import { Readable } from 'stream'
 import { pipeline } from 'stream/promises'
 import type { ReadableStream as NodeWebReadableStream } from 'stream/web'
@@ -96,7 +97,7 @@ export function updateYtDlp(binaryPath: string, timeoutMs = 120000): Promise<str
 export async function downloadFfmpeg(targetDir: string, onProgress?: (received: number, total: number) => void): Promise<string> {
   if (process.platform !== 'win32') throw new Error('自动安装仅支持 Windows；其他平台请通过包管理器安装 ffmpeg')
   const target = join(targetDir, 'ffmpeg.exe')
-  if (existsSync(target)) return target
+  if (existsSync(target) && await isBinaryUsable(target, 'ffmpeg')) return target
   mkdirSync(targetDir, { recursive: true })
   const response = await net.fetch(FFMPEG_URL, { redirect: 'follow' })
   if (!response.ok) throw new Error(`下载失败（HTTP ${response.status}），请检查网络或代理`)

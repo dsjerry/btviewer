@@ -133,9 +133,9 @@ html[data-theme='light']{
 /* 播放器控制条内的截图/录制按钮（video.js 自定义组件）
    注意：沿用原生 :before 的绝对定位 + 1.8em/1.67 度量做垂直居中，不要覆盖 line-height */
 .video-js .vjs-btv-snapshot .vjs-icon-placeholder:before{content:'◎';font-size:1.6em}
-.video-js .vjs-btv-record .vjs-icon-placeholder:before{content:'●';font-size:1.1em}
+.video-js .vjs-btv-record .vjs-icon-placeholder:before{content:'';display:block;width:14px;height:14px;border:2px solid rgba(255,255,255,.9);border-radius:50%;background:#ff5148;box-shadow:0 0 8px rgba(255,81,72,.55)}
 .video-js .vjs-btv-record.vjs-btv-recording{color:#ff6b5e}
-.video-js .vjs-btv-record.vjs-btv-recording .vjs-icon-placeholder:before{content:'■'}
+.video-js .vjs-btv-record.vjs-btv-recording .vjs-icon-placeholder:before{content:'';width:13px;height:13px;border:0;border-radius:3px;background:#ff5148;box-shadow:0 0 8px rgba(255,81,72,.55)}
 /* 录制中的画面左上角角标 */
 .record-badge{position:absolute;top:16px;left:16px;z-index:3;display:flex;align-items:center;gap:7px;padding:6px 12px;color:#ff8a7d;background:rgba(11,12,10,.72);border-radius:4px;font:12px 'DM Mono',monospace;pointer-events:none}
 .record-badge span{width:8px;height:8px;background:#ff6b5e;border-radius:50%;animation:rec-blink 1s ease-in-out infinite}
@@ -168,7 +168,7 @@ html[data-theme='light']{
 .file-progress small{flex:none;color:var(--text-time);font:11px 'DM Mono',monospace}
 
 /* 播放器始终使用暗色调色板（观影场景）：局部覆盖变量，主题切换不影响播放器 */
-.player-page{--text:#f3f0e8;--text-label:#8f9086;--text-secondary:#d4d5c7;--text-dim:#77796d;--accent-text:#d8f36a;--border-soft2:#292b24;--border-btn:#46483a;--border-accent-hover:#d8f36a;--border-accent-soft:#59683b;--bg-accent-soft:#29351e;--text-success:#c9f887}
+.player-page{--text:#f3f0e8;--text-label:#8f9086;--text-secondary:#d4d5c7;--text-dim:#77796d;--accent-text:#d8f36a;--border-soft2:#292b24;--border-btn:#46483a;--border-accent-hover:#d8f36a;--border-accent-soft:#59683b;--bg-accent-soft:#29351e;--text-success:#c9f887;color:var(--text)}
 /* 解析中状态的亮色文字色 */
 html[data-theme='light'] .download-status.parsing{color:#8a6d1f}
 html[data-theme='light'] .download-status.parsing span{background:#8a6d1f}
@@ -210,7 +210,15 @@ html[data-theme='light'] .download-status.parsing span{background:#8a6d1f}
 .settings-label{display:block;margin:14px 0 8px;color:var(--text-soft);font-size:13px}
 .settings-row select{flex:1;padding:10px 12px;color:var(--text-input);background:var(--bg);border:1px solid var(--border-input);border-radius:4px;outline:none}
 .settings-row select:focus{border-color:var(--border-focus)}
-.settings-hint{margin:8px 0 0;color:var(--text-dim);font-size:12px;line-height:1.6}
+.settings-label-row{display:flex;align-items:center;gap:8px;margin:14px 0 8px}
+.settings-label-row .settings-label{display:inline-block;margin:0}
+.settings-card-tooltip{position:relative;z-index:0}
+.settings-card-tooltip:hover,.settings-card-tooltip:focus-within{z-index:10}
+.settings-help{position:relative;display:inline-flex;align-items:center}
+.settings-help-trigger{display:grid;place-items:center;width:18px;height:18px;padding:0;border:1px solid var(--border-btn);border-radius:50%;color:var(--text-dim);background:var(--glass-surface);font:600 11px 'DM Mono',monospace;line-height:1;cursor:help}
+.settings-help-trigger:hover,.settings-help-trigger:focus-visible{border-color:var(--border-focus);color:var(--accent-text);outline:none}
+.settings-help-tooltip{position:absolute;top:calc(100% + 9px);left:-8px;z-index:20;width:min(380px,calc(100vw - 40px));padding:12px 14px;border:1px solid var(--glass-border);border-radius:8px;color:var(--text);background:var(--glass-surface-strong);box-shadow:0 12px 32px var(--glass-shadow),inset 0 1px var(--glass-highlight);backdrop-filter:blur(18px) saturate(145%);-webkit-backdrop-filter:blur(18px) saturate(145%);font-size:12px;line-height:1.6;white-space:normal;visibility:hidden;opacity:0;transform:translateY(-3px);transition:opacity .14s ease,transform .14s ease,visibility .14s}
+.settings-help:hover .settings-help-tooltip,.settings-help:focus-within .settings-help-tooltip{visibility:visible;opacity:1;transform:translateY(0)}
 
 /* 状态徽标：禁止折行（窄容器下“已完成 100%”会被拆成两行） */
 .status-pill{white-space:nowrap;flex:none;align-self:flex-start}
@@ -302,3 +310,29 @@ html[data-theme='light'] .download-status.parsing span{background:#8a6d1f}
 /* 媒体库详情：来源链接行（复用 .detail-path 排版，链接用路径色弱化） */
 .source-path{margin-top:14px}
 .source-path>span{color:var(--text-path)}
+
+.player-page{height:100%;min-height:0;display:grid;grid-template-rows:auto minmax(0,1fr);overflow:hidden;background:radial-gradient(ellipse at 50% 0,rgba(43,48,34,.36),transparent 52%),#090a0c;color:var(--text)}
+.player-header{position:relative;z-index:1;display:flex;align-items:center;gap:clamp(12px,2vw,26px);min-height:82px;padding:14px clamp(18px,3vw,42px);border-bottom:1px solid rgba(236,243,210,.1);background:linear-gradient(180deg,rgba(28,30,27,.94),rgba(17,18,17,.86));box-shadow:0 10px 32px rgba(0,0,0,.18)}
+.player-header .back-link{display:flex;align-items:center;gap:7px;flex:none;padding:9px 12px;border:1px solid rgba(215,230,172,.14);border-radius:7px;color:#b8bdad;background:rgba(255,255,255,.035);transition:color .16s,border-color .16s,background .16s}
+.player-header .back-link:hover{color:#e8f3ca;border-color:rgba(216,243,106,.4);background:rgba(216,243,106,.08)}
+.player-heading{display:flex;align-items:center;gap:13px;min-width:0;flex:1}
+.player-heading .file-icon{width:36px;height:36px;border-radius:9px;box-shadow:0 4px 16px rgba(216,243,106,.16)}
+.player-heading>div{min-width:0}
+.player-heading h2{overflow:hidden;margin:0 0 4px;color:#f3f0e8;font-size:15px;font-weight:600;letter-spacing:.1px;text-overflow:ellipsis;white-space:nowrap}
+.player-heading p{margin:0;color:#85897c;font-size:11px;letter-spacing:.4px}
+.playlist-controls{display:flex;align-items:center;gap:6px;flex:none}
+.playlist-button{min-width:36px;min-height:34px;padding:6px 10px;color:#d4d5c7;background:rgba(255,255,255,.035);border-color:rgba(220,232,192,.16);border-radius:7px;transition:color .15s,border-color .15s,background .15s,transform .15s}
+.playlist-button:hover:enabled{color:#eaffad;border-color:rgba(216,243,106,.52);background:rgba(216,243,106,.09);transform:translateY(-1px)}
+.playlist-button:disabled{opacity:.35}
+.playlist-index{min-width:48px;color:#969b8b;font:11px 'DM Mono',monospace}
+.player-stage{position:relative;isolation:isolate;container-type:size;display:flex;align-items:center;justify-content:center;min-height:0;padding:clamp(18px,3.5vw,48px);overflow:hidden;background:radial-gradient(ellipse at 50% 45%,rgba(31,35,34,.36),transparent 68%)}
+.player-container{position:relative;width:min(100cqw,1440px,177.7778cqh);height:auto;aspect-ratio:16/9;overflow:hidden;border:1px solid rgba(226,236,204,.12);border-radius:12px;background:#000;box-shadow:0 26px 90px rgba(0,0,0,.48),0 2px 14px rgba(0,0,0,.25)}
+.player-container .video-js{border-radius:11px;background:#000}
+.player-overlay{position:absolute;top:50%;left:50%;z-index:3;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px;width:min(100cqw,1440px,177.7778cqh);aspect-ratio:16/9;transform:translate(-50%,-50%);border:1px solid rgba(232,240,210,.1);border-radius:12px;background:rgba(7,9,10,.78);color:#d8dccf;font-size:13px;backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
+.player-error{padding:24px;color:#ffb3a8;text-align:center}
+.player-error .secondary-action{width:auto;min-width:140px;margin:4px 0 0;padding:10px 18px;border-color:rgba(230,240,210,.28);color:#e6eadf}
+.player-error .secondary-action:hover{border-color:rgba(216,243,106,.6);color:#eaffad}
+.resume-toast{top:24px;padding:10px 18px;border-radius:8px;background:rgba(25,34,24,.92);box-shadow:0 12px 32px rgba(0,0,0,.3);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
+.record-badge{top:22px;left:22px;padding:7px 12px;border:1px solid rgba(255,138,125,.28);border-radius:7px;background:rgba(15,17,17,.82);box-shadow:0 8px 24px rgba(0,0,0,.26);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
+@media(max-width:900px){.player-header{gap:10px;padding-inline:16px}.player-header .back-link{padding:8px}.player-heading{gap:9px}.player-heading h2{font-size:13px}.playlist-controls{gap:4px}.playlist-button{min-width:32px;padding-inline:7px}.player-stage{padding:16px}}
+@media(max-height:560px){.player-header{min-height:64px;padding-block:8px}.player-heading .file-icon{width:30px;height:30px}.player-stage{padding-block:12px}}

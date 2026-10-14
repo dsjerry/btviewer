@@ -160,6 +160,14 @@ export function videoFormat(hasFfmpeg: boolean): string {
     : 'b[ext=mp4]/b'
 }
 
+export function binaryVersionArgs(name: 'yt-dlp' | 'ffmpeg'): string[] {
+  return name === 'ffmpeg' ? ['-version'] : ['--version']
+}
+
+export function isBinaryUsable(candidate: string, name: 'yt-dlp' | 'ffmpeg'): Promise<boolean> {
+  return versionCheck(candidate, binaryVersionArgs(name))
+}
+
 async function doDetectBinary(customPath: string | undefined, name: 'yt-dlp' | 'ffmpeg', extraDir?: string): Promise<string | null> {
   // 自定义路径必须真实存在；裸名交给系统 PATH 解析（Windows 下显式补 .exe 优先）
   const bare = process.platform === 'win32' ? [`${name}.exe`, name] : [name]
@@ -170,17 +178,17 @@ async function doDetectBinary(customPath: string | undefined, name: 'yt-dlp' | '
   ]
   for (const candidate of candidates) {
     if (candidate.includes('\\') || candidate.includes('/')) { if (!existsSync(candidate)) continue }
-    if (await versionCheck(candidate)) return candidate
+    if (await isBinaryUsable(candidate, name)) return candidate
   }
   return null
 }
 
-function versionCheck(candidate: string): Promise<boolean> {
+function versionCheck(candidate: string, args: string[]): Promise<boolean> {
   return new Promise((resolve) => {
     let settled = false
     const done = (value: boolean) => { if (!settled) { settled = true; resolve(value) } }
     try {
-      const child = spawn(candidate, ['--version'], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] })
+      const child = spawn(candidate, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] })
       const timer = setTimeout(() => { child.kill(); done(false) }, 10000)
       child.once('error', () => { clearTimeout(timer); done(false) })
       child.once('exit', (code) => { clearTimeout(timer); done(code === 0) })

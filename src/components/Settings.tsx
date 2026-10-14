@@ -272,7 +272,7 @@ const Settings: React.FC<{ theme: ThemeMode; onThemeChange: (mode: ThemeMode) =>
               <input type="number" min={1} max={16} value={state.httpSplit} onChange={(event) => setState({ ...state, httpSplit: Math.max(1, Math.min(16, Number(event.target.value) || 8)) })} />
             </div>
           </div>
-          <div className="settings-card">
+          <div className="settings-card settings-card-tooltip">
             <h3>视频站点解析（yt-dlp）</h3>
             <p>网页类链接自动交给 yt-dlp 解析下载（YouTube、Bilibili 等）；解析 YouTube 高画质需要 JS 运行时（deno），合并分离音视频需要 ffmpeg</p>
             <div className="settings-row">
@@ -318,13 +318,18 @@ const Settings: React.FC<{ theme: ThemeMode; onThemeChange: (mode: ThemeMode) =>
                 )}
               </>
             )}
-            <label className="settings-label" htmlFor="ytdlp-browser">浏览器 Cookies（YouTube 风控时解锁高画质下载）</label>
+            <div className="settings-label-row">
+              <label className="settings-label" htmlFor="ytdlp-browser">浏览器 Cookies</label>
+              <span className="settings-help">
+                <button type="button" className="settings-help-trigger" aria-label="浏览器 Cookies 使用说明" aria-describedby="ytdlp-cookie-help">?</button>
+                <span id="ytdlp-cookie-help" className="settings-help-tooltip" role="tooltip">选择登录过 YouTube 的浏览器。配置后会使用 web_embedded 客户端解析（可拿到 4K），不可用时回退 web_safari（最高 1080p）。读取时需完全退出对应浏览器；Chrome/Edge 127+ 可能因 app-bound 加密报 “Failed to decrypt with DPAPI”，推荐 Firefox。未配置或读取失败时使用匿名会话，部分视频可能要求登录。</span>
+              </span>
+            </div>
             <div className="settings-row">
               <select id="ytdlp-browser" value={state.ytdlpBrowser} onChange={(event) => setState({ ...state, ytdlpBrowser: event.target.value })}>
                 {BROWSER_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
               </select>
             </div>
-            <p className="settings-hint">选择你登录过 YouTube 的浏览器；配置后会自动使用 web_embedded 客户端解析（可拿到 4K），不可用时回退 web_safari（1080p）。读取时需完全退出对应浏览器（Edge/Chrome 常驻后台，请从托盘退出）；Chrome/Edge 127+ 因 app-bound 加密常报 “Failed to decrypt with DPAPI” 读取失败，推荐 Firefox（运行时也能读）。未配置或读取失败时改用匿名会话（同样支持 4K，但部分视频要求登录）</p>
           </div>
           <div className="settings-card">
             <h3>版本更新 <small className="version-tag">v{pkg.version}</small></h3>

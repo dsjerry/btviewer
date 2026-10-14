@@ -208,6 +208,7 @@ function setupIPC() {
   // yt-dlp 可用性检测（设置页展示状态与版本）；同时检测 JS 运行时（解 YouTube 签名挑战所需）
   ipcMain.handle('ytdlp:check', async (_event, customPath?: string) => {
     try {
+      clearDetectCache()
       const binary = await detectBinary(customPath || undefined, 'yt-dlp', join(app.getPath('userData'), 'bin'))
       const ffmpeg = binary ? await detectBinary(undefined, 'ffmpeg', join(app.getPath('userData'), 'bin')) : null
       const jsRuntime = binary ? await detectJsRuntime(join(app.getPath('userData'), 'bin')) : null
