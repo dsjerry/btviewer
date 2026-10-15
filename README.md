@@ -35,6 +35,10 @@ aria2 负责资源发现和下载（BT 与直链共用一个下载队列），yt
 - 下载任务状态、速度、节点数、进度与剩余时间展示，支持暂停、恢复和移除
 - 设置页：自定义下载目录、Tracker 列表、最大同时下载数（持久化并对新任务生效）
 - 本地 HTTP Range 流播放（带访问令牌，防止本机其它进程读取）
+- 单实例运行：安装包注册 `.torrent` / `.metalink` 文件关联与 `magnet` 协议，双击种子或点网页磁力链接会把任务交给已运行的实例处理；磁力默认关联可在设置页开关（默认不抢其它 BT 客户端的关联）
+- 剪贴板监听（可选，默认关闭）：复制到磁力/直链时在应用内提示一键添加，不会自动开始下载；队列全部完成后可执行打开目录/文件、退出、关机、睡眠（关机带 60 秒取消窗口）
+- 应用内日志查看（按级别过滤、只读文件尾部）与「复制诊断信息」（版本/引擎/设置/任务概况/最近错误，自动隐藏代理账号密码与本机用户名）；命令行 `BTViewer.exe --diagnostics` 可直接输出同一份诊断文本
+- 界面语言：默认简体中文，可在设置页切换为 English（导航、首页、下载、媒体库、订阅、设置、播放器全部完成翻译；词条表 430+ 条，缺英文时自动回退中文）
 - 自动注入公共 Tracker，支持通过环境变量或设置页自定义
 - 自定义无边框窗口和深色媒体工作台界面，内置应用图标
 - Windows（x64）与 Linux（amd64）开发环境内置 aria2c
@@ -52,6 +56,12 @@ aria2 负责资源发现和下载（BT 与直链共用一个下载队列），yt
 
 ```bash
 ARIA2C_PATH=/absolute/path/to/aria2c npm run dev
+```
+
+内嵌封面提取与「兼容播放」（转封装/转码）同样使用 ffmpeg，可用 `FFMPEG_PATH` 指定自定义位置（未设置时依次查找应用内安装目录与 PATH）：
+
+```bash
+FFMPEG_PATH=/absolute/path/to/ffmpeg npm run dev
 ```
 
 Linux 下如果使用系统 aria2：
@@ -105,6 +115,18 @@ npm run dev
 
 ```bash
 npm run typecheck
+```
+
+类型检查 + lint + 单测一次跑完：
+
+```bash
+npm run verify
+```
+
+端到端冒烟测试（会启动真实应用与本地文件服务，验证「添加任务 → 真实下载 → 界面显示已完成」；需要先 `npm run build`，Windows 上已在 CI 中执行）：
+
+```bash
+npm run smoke
 ```
 
 构建 renderer、主进程和 preload：
@@ -176,6 +198,18 @@ macOS:  resources/aria2/aria2c
 ```
 
 Linux aria2 使用的动态库也需要随应用提供，或确保目标系统已经安装对应运行库。
+
+本地打包：
+
+```bash
+npm run package:win     # Windows NSIS 安装包（含文件关联与 magnet 协议注册）
+npm run package:mac     # macOS dmg + zip
+npm run package:linux   # Linux AppImage + deb
+```
+
+发布走 GitHub Actions：[.github/workflows/release.yml](.github/workflows/release.yml) 是手动触发的工作流（Actions 页面填版本号，如 `v1.2.3`），会先规范化并写入 `package.json` 版本，再在 Windows / Linux 上打包（macOS 暂不打包：仓库内没有 macOS 版 aria2c 二进制），最后统一创建 GitHub Release 并附加产物；[.github/workflows/ci.yml](.github/workflows/ci.yml) 在每次 push / PR 上跑 lint、类型检查、单测与构建（`npm run verify` 可在本地一次跑完前三项）。
+
+主进程依赖（如 fast-xml-parser）在构建时内联进主进程包，因此安装包内不再分发 `node_modules`——改动 `electron.vite.config.ts` 的 external 列表时需注意这一点。
 
 ## 常见问题
 

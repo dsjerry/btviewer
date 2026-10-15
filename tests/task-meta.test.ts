@@ -1,6 +1,22 @@
 import { describe, expect, it } from 'vitest'
-import { formatSize, STATUS_LABELS, taskType, TYPE_LABELS, watchLabel, watchPercent } from '../src/services/task-meta'
+import { formatSize, formatSpeed, STATUS_LABELS, taskType, TYPE_LABELS, watchLabel, watchPercent } from '../src/services/task-meta'
 import type { TorrentStatus } from '../src/types'
+
+describe('formatSpeed', () => {
+  it('按 1024 进制换算并带单位', () => {
+    expect(formatSpeed(0)).toBe('0 B/s')
+    expect(formatSpeed(900)).toBe('900 B/s')
+    expect(formatSpeed(1024)).toBe('1.0 KB/s')
+    expect(formatSpeed(1024 * 1024 * 2.5)).toBe('2.5 MB/s')
+    expect(formatSpeed(1024 ** 3)).toBe('1.0 GB/s')
+  })
+
+  it('非法或负值退化为 0 B/s', () => {
+    expect(formatSpeed(Number.NaN)).toBe('0 B/s')
+    expect(formatSpeed(-5)).toBe('0 B/s')
+    expect(formatSpeed(Number.POSITIVE_INFINITY)).toBe('0 B/s')
+  })
+})
 
 describe('formatSize', () => {
   it('renders 0 for empty or invalid values', () => {

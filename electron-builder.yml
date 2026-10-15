@@ -3,6 +3,8 @@ productName: BTViewer
 directories:
   buildResources: build
   output: release
+# 只打包构建产物：主进程依赖已在 electron-vite 里内联（见 externalizeDepsPlugin 的 exclude），
+# 因此不需要把 node_modules 一起分发
 files:
   - release/app/**/*
 extraResources:
@@ -10,12 +12,49 @@ extraResources:
     to: aria2
   - from: resources/icon.png
     to: icon.png
+# 文件关联与协议注册在安装期完成（比运行期写注册表可靠）：
+# 双击 .torrent/.metalink 打开应用，点网页磁力链接唤起应用（应用内用单实例把输入转给已运行实例）
+fileAssociations:
+  - ext: torrent
+    name: BitTorrent 种子文件
+    description: BTViewer 种子文件
+    role: Viewer
+    icon: resources/icon.ico
+  - ext: metalink
+    name: Metalink 下载描述文件
+    description: BTViewer Metalink 文件
+    role: Viewer
+    icon: resources/icon.ico
+protocols:
+  - name: Magnet Link
+    schemes:
+      - magnet
+# 打 tag 后由 CI 用 `electron-builder --publish always` 上传到 GitHub Release
+publish:
+  provider: github
+  owner: dsjerry
+  repo: btviewer
+artifactName: ${productName}-${version}-${os}-${arch}.${ext}
 win:
   target: nsis
   icon: resources/icon.ico
+nsis:
+  # 安装向导而非静默安装：与文件关联/协议注册配合，用户可改安装目录
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: BTViewer
 mac:
-  target: dmg
+  target:
+    - dmg
+    - zip
   icon: resources/icon.icns
+  category: public.app-category.utilities
 linux:
-  target: AppImage
+  target:
+    - AppImage
+    - deb
   icon: resources/icon.png
+  category: Network

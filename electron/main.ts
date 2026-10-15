@@ -1,23 +1,39 @@
-import { app, BrowserWindow, ipcMain, dialog, Menu, shell, nativeTheme, Tray, Notification } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, Menu, shell, nativeTheme, Tray, Notification, clipboard } from 'electron'
 import { join, resolve } from 'path'
-import { createWriteStream, rmSync, writeFileSync } from 'fs'
+import { spawn } from 'child_process'
+import { createWriteStream, readFileSync, rmSync, writeFileSync } from 'fs'
 import { randomUUID } from 'crypto'
 import { torrentEngine } from './torrent-engine'
 import { getProgress, setProgress } from './progress-store'
 import { getThumbnails, saveThumbnail } from './thumbnail-store'
 import { loadSettings, saveSettings } from './settings'
-import { checkForUpdates, initUpdater, installUpdate } from './updater'
 import { addFeed, checkAllFeeds, checkFeed, downloadFeedItem, getFeeds, removeFeed, startPolling, updateFeed } from './rss'
 import { isUnderRoot } from './torrent-engine'
+import { collectLaunchInputs } from './launch-inputs'
+import { planPostAction } from './post-action'
+import { createClipboardWatcher } from './clipboard-watch'
+import { formatSpeed } from '../src/services/task-meta'
 import { detectBinary, detectJsRuntime, clearDetectCache } from './ytdlp-engine'
 import { downloadYtDlp, downloadFfmpeg, downloadDeno, updateYtDlp } from './ytdlp-installer'
-import { logger } from './logger'
-import type { TorrentStatus } from '../src/types'
+import { logger, listLogFiles, readLogTail } from './logger'
+import { buildDiagnostics } from './diagnostics'
+import { isNewerVersion, parseLatestRelease } from './update-check'
+import type { AppSettings, GlobalStat, TorrentStatus } from '../src/types'
 
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 let isQuitting = false
 const isDev = !app.isPackaged
+
+// 单实例：第二次启动（双击种子 / 点磁力 / 重复点图标）只把输入交给已有实例后退出，
+// 否则会有多个 aria2 进程、多份 tasks.json 互相打架。
+// `--diagnostics` 是只读的诊断输出，不参与单实例协商（出问题时任何实例都能生成）
+const isDiagnosticsRun = process.argv.includes('--diagnostics')
+const hasSingleInstanceLock = isDiagnosticsRun ? false : app.requestSingleInstanceLock()
+if (!hasSingleInstanceLock && !isDiagnosticsRun) {
+  console.log(`[launch] 已有实例在运行，退出并把输入交给它：${process.argv.slice(1).join(' ')}`)
+  app.quit()
+}
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -33,14 +49,128 @@ function applyLoginItem(enabled: boolean) {
   app.setLoginItemSettings({ openAtLogin: enabled, path: process.execPath, args: ['--hidden'] })
 }
 
-// 下载完成桌面通知（完整版 RSS 依赖此联动；可在设置关闭）
+// 设置 → 引擎配置：映射集中在一处，避免「启动时」与「保存设置时」两个调用点漂移。
+// 只有显式出现（!== undefined）的字段才会覆盖引擎值，未设置时保留引擎默认。
+function engineConfig(settings: AppSettings) {
+  return {
+    downloadDir: settings.downloadDir,
+    trackers: settings.trackers,
+    maxConcurrentDownloads: settings.maxConcurrentDownloads,
+    speedLimit: settings.speedLimit,
+    httpSplit: settings.httpSplit,
+    ytdlpPath: settings.ytdlpPath,
+    proxy: settings.proxy,
+    ytdlpBrowser: settings.ytdlpBrowser,
+    listenPort: settings.listenPort,
+    enableDht: settings.enableDht,
+    enablePex: settings.enablePex,
+    enableLpd: settings.enableLpd,
+    btEncryption: settings.btEncryption,
+    seedMode: settings.seedMode,
+    seedRatio: settings.seedRatio,
+    seedMinutes: settings.seedMinutes,
+    streamPriority: settings.streamPriority,
+    autoRetry: settings.autoRetry,
+    maxRetries: settings.maxRetries
+  }
+}
+
+// 下载完成桌面通知 + 完成后的动作（完整版 RSS 依赖此联动；均可在设置关闭）
 function setupCompleteNotifications() {
-  torrentEngine.onTorrentComplete((_hash, name) => {
-    if (loadSettings().notifyOnComplete === false || !Notification.isSupported()) return
-    new Notification({ title: 'BTViewer 下载完成', body: name }).show()
+  torrentEngine.onTorrentComplete((hash, name) => {
+    const settings = loadSettings()
+    if (settings.notifyOnComplete !== false && Notification.isSupported()) {
+      const notification = new Notification({ title: 'BTViewer 下载完成', body: name })
+      // 点通知直接跳到该任务（放到下载队列页并展开详情）
+      notification.on('click', () => {
+        showMainWindow()
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('app:focus-task', hash)
+      })
+      notification.show()
+    }
+    void runPostAction(settings.postAction || 'none', hash, name)
   })
   // 全局状态广播：跨会话恢复的任务（无 per-task callback）也能实时推送进度
   torrentEngine.onStatusBroadcast(sendStatus)
+}
+
+// 一键诊断（C5）：渲染层按钮与 `--diagnostics` 命令行共用同一份收集逻辑
+async function collectDiagnostics(): Promise<string> {
+  const settings = loadSettings()
+  const statuses = torrentEngine.getAllStatuses()
+  const errors = readLogTail(200).entries.filter((entry) => entry.level === 'ERROR' || entry.level === 'WARN').slice(-12).map((entry) => entry.raw)
+  const [ffmpeg, ytdlp, jsRuntime] = await Promise.all([
+    detectBinary(undefined, 'ffmpeg', join(app.getPath('userData'), 'bin')).catch(() => null),
+    detectBinary(settings.ytdlpPath || undefined, 'yt-dlp', join(app.getPath('userData'), 'bin')).catch(() => null),
+    detectJsRuntime(join(app.getPath('userData'), 'bin')).catch(() => null)
+  ])
+  const count = (state: TorrentStatus['status']) => statuses.filter((status) => status.status === state).length
+  return buildDiagnostics({
+    appVersion: app.getVersion(),
+    versions: { electron: process.versions.electron || '', chrome: process.versions.chrome || '', node: process.versions.node || '' },
+    platform: process.platform,
+    arch: process.arch,
+    packaged: app.isPackaged,
+    home: app.getPath('home'),
+    settings: {
+      downloadDir: torrentEngine.effectiveDownloadDir(),
+      maxConcurrentDownloads: settings.maxConcurrentDownloads,
+      speedLimit: settings.speedLimit,
+      httpSplit: settings.httpSplit,
+      proxy: settings.proxy,
+      trackers: settings.trackers,
+      ytdlpPath: settings.ytdlpPath,
+      ytdlpBrowser: settings.ytdlpBrowser,
+      seedMode: settings.seedMode,
+      listenPort: settings.listenPort,
+      streamPriority: settings.streamPriority,
+      autoRetry: settings.autoRetry
+    },
+    network: await torrentEngine.networkStatus().catch(() => null),
+    tasks: { total: statuses.length, downloading: count('downloading'), connecting: count('connecting'), parsing: count('parsing'), seeding: count('seeding'), paused: count('paused'), error: count('error') },
+    binaries: { ffmpeg, ytdlp, jsRuntime: jsRuntime ? `${jsRuntime.name} ${jsRuntime.version || ''}`.trim() : null },
+    recentErrors: errors
+  })
+}
+
+// 剪贴板监听（C4）：只在应用内提示，绝不自动开始下载
+let clipboardWatcher: ReturnType<typeof createClipboardWatcher> | null = null
+
+function applyClipboardWatch(enabled: boolean) {
+  if (enabled) {
+    if (!clipboardWatcher) {
+      clipboardWatcher = createClipboardWatcher({
+        read: () => clipboard.readText(),
+        onInput: (input) => {
+          logger.info('clipboard', `检测到链接：${input.slice(0, 120)}`)
+          if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('app:clipboard-input', input)
+        }
+      })
+    }
+    clipboardWatcher.start()
+  } else {
+    clipboardWatcher?.stop()
+  }
+}
+
+// 完成后的动作（C3）：只在队列没有别的任务还在下载时执行；关机/睡眠都给用户留出取消窗口
+async function runPostAction(action: AppSettings['postAction'] | undefined, hash: string, name: string) {
+  if (!action || action === 'none') return
+  const request = planPostAction(action, torrentEngine.taskSnapshot(hash), torrentEngine.pendingCount(), process.platform)
+  if (!request) return
+  logger.info('post-action', `${action} → ${request.kind}${request.path ? ` ${request.path}` : ''}`)
+  if (request.kind === 'quit') { quitApp(); return }
+  if (request.kind === 'power' && request.command) {
+    // 先弹一条系统通知说明将要发生什么（关机可取消），再执行命令
+    if (Notification.isSupported()) new Notification({ title: `BTViewer：${name} 已完成`, body: request.message }).show()
+    try { spawn(request.command, request.args || [], { windowsHide: true, detached: true, stdio: 'ignore' }).unref() } catch (error) { logger.error('post-action', getErrorMessage(error)) }
+    return
+  }
+  if (request.path) {
+    const error = await shell.openPath(request.path)
+    if (error) logger.error('post-action', `打开失败：${error}`)
+    else if (Notification.isSupported()) new Notification({ title: 'BTViewer', body: request.message }).show()
+  }
 }
 
 // 录制会话：渲染层 MediaRecorder 的分片经 IPC 流式写入磁盘，内存不随录制时长增长
@@ -73,11 +203,39 @@ function createTray() {
   const menu = Menu.buildFromTemplate([
     { label: '显示主窗口', click: showMainWindow },
     { type: 'separator' },
+    { label: '全部暂停', click: () => void torrentEngine.pauseAll().catch((error) => logger.error('tray', getErrorMessage(error))) },
+    { label: '恢复全部', click: () => void torrentEngine.resumeAll().catch((error) => logger.error('tray', getErrorMessage(error))) },
+    { type: 'separator' },
     { label: '退出', click: () => quitApp() }
   ])
   tray.setContextMenu(menu)
   // Windows 左键点击默认无动作，统一为唤起主窗口
   tray.on('click', showMainWindow)
+}
+
+// 托盘提示实时反映全局速度与任务数（C2）；速度按 KB 取整后再比对，避免无意义刷新
+let lastTrayStat = ''
+function updateTrayStat(stat: GlobalStat) {
+  if (!tray) return
+  const signature = `${Math.round(stat.downloadSpeed / 1024)}|${Math.round(stat.uploadSpeed / 1024)}|${stat.numActive}|${stat.numWaiting}`
+  if (signature === lastTrayStat) return
+  lastTrayStat = signature
+  const parts = ['BTViewer']
+  if (stat.downloadSpeed > 0 || stat.uploadSpeed > 0) parts.push(`↓ ${formatSpeed(stat.downloadSpeed)} ↑ ${formatSpeed(stat.uploadSpeed)}`)
+  const pending = stat.numActive + stat.numWaiting
+  if (pending > 0) parts.push(`${pending} 个任务`)
+  tray.setToolTip(parts.join(' · '))
+}
+
+// 发往渲染层的统计做同样去重，避免每秒都触发一次无变化的重渲染
+let lastSentStat = ''
+function forwardGlobalStat(stat: GlobalStat) {
+  updateTrayStat(stat)
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  const signature = `${Math.round(stat.downloadSpeed / 1024)}|${Math.round(stat.uploadSpeed / 1024)}|${stat.numActive}|${stat.numWaiting}|${stat.numStopped}`
+  if (signature === lastSentStat) return
+  lastSentStat = signature
+  mainWindow.webContents.send('torrent:global-stat-update', stat)
 }
 
 // 真正退出：置标志后走 close → window-all-closed → shutdown 的既有清理链路
@@ -123,6 +281,9 @@ async function createWindow() {
   mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription) => {
     console.error(`[Window] Failed to load (${errorCode}): ${errorDescription}`)
   })
+
+  // 渲染层加载完成后再投递排队中的外部输入（双击种子时应用可能还没起来）
+  mainWindow.webContents.on('did-finish-load', () => flushPendingInputs())
 
   try {
     if (isDev) {
@@ -203,7 +364,187 @@ function setupIPC() {
     }
   })
 
+  // 失败重试：清掉 aria2 结果记录（保留磁盘数据）后按原来源重新入队
+  ipcMain.handle('torrent:retry', async (_event, infoHash: string) => {
+    try {
+      return { success: true, data: await torrentEngine.retryTorrent(infoHash) }
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) }
+    }
+  })
+
+  // 单任务限速：'0' 或空串表示取消限速
+  ipcMain.handle('torrent:set-speed-limit', async (_event, infoHash: string, limit: string) => {
+    try {
+      await torrentEngine.setTaskSpeedLimit(infoHash, String(limit ?? ''))
+      return { success: true }
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) }
+    }
+  })
+
+  ipcMain.handle('torrent:move', async (_event, infoHash: string, action: 'top' | 'up' | 'down') => {
+    try {
+      await torrentEngine.moveTask(infoHash, action)
+      return { success: true }
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) }
+    }
+  })
+
+  ipcMain.handle('torrent:pause-all', async () => {
+    try {
+      return { success: true, data: await torrentEngine.pauseAll() }
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) }
+    }
+  })
+
+  ipcMain.handle('torrent:resume-all', async () => {
+    try {
+      return { success: true, data: await torrentEngine.resumeAll() }
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) }
+    }
+  })
+
+  // 边下边播：播放/拖动时把待播位置标为优先分片
+  ipcMain.handle('torrent:prioritize-stream', async (_event, infoHash: string, offsetBytes?: number) => {
+    try {
+      return { success: true, data: await torrentEngine.prioritizeStream(infoHash, Number(offsetBytes) || 0) }
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) }
+    }
+  })
+
+  ipcMain.handle('torrent:peers', async (_event, infoHash: string) => {
+    try {
+      return { success: true, data: await torrentEngine.taskPeers(infoHash) }
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) }
+    }
+  })
+
+  ipcMain.handle('torrent:trackers', async (_event, infoHash: string) => {
+    try {
+      return { success: true, data: await torrentEngine.taskTrackers(infoHash) }
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) }
+    }
+  })
+
+  ipcMain.handle('engine:network-status', async () => {
+    try {
+      return { success: true, data: await torrentEngine.networkStatus() }
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) }
+    }
+  })
+
+  // 兼容播放（B1）：内置播放器解不了的编码，用 ffmpeg 生成可播放副本
+  ipcMain.handle('media:compat-plan', async (_event, infoHash: string, filePath: string, audioIndex?: number) => {
+    try {
+      return { success: true, data: await torrentEngine.compatPlan(infoHash, filePath, Number(audioIndex) || 0) }
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) }
+    }
+  })
+
+  ipcMain.handle('media:compat-start', async (_event, infoHash: string, filePath: string, audioIndex?: number) => {
+    try {
+      return { success: true, data: await torrentEngine.compatStart(infoHash, filePath, Number(audioIndex) || 0) }
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) }
+    }
+  })
+
+  ipcMain.handle('media:compat-url', (_event, id: string) => {
+    try {
+      return { success: true, data: torrentEngine.compatUrl(id) }
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) }
+    }
+  })
+
+  ipcMain.handle('media:compat-cancel', (_event, id: string) => {
+    torrentEngine.compatCancel(id)
+    return { success: true }
+  })
+
+  // 批量入队（多链接粘贴 / 多文件拖放）：不等待 metadata，一次返回汇总
+  ipcMain.handle('torrent:add-batch', async (_event, inputs: string[]) => {
+    try {
+      return { success: true, data: await torrentEngine.addTasksBatch(Array.isArray(inputs) ? inputs.map(String) : []) }
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) }
+    }
+  })
+
+  // 任务清单导出：.json 便于再次导入，.txt 一行一个链接便于分享（按用户在保存对话框里选的扩展名决定）
+  ipcMain.handle('tasks:export', async () => {
+    try {
+      if (!mainWindow || mainWindow.isDestroyed()) return { success: false, error: '窗口尚未准备好' }
+      const tasks = torrentEngine.exportTaskList()
+      const stamp = new Date().toISOString().slice(0, 10)
+      const result = await dialog.showSaveDialog(mainWindow, {
+        title: '导出任务清单',
+        defaultPath: join(app.getPath('downloads'), `btviewer-tasks-${stamp}.json`),
+        filters: [{ name: '任务清单（可再次导入）', extensions: ['json'] }, { name: '链接清单（一行一个链接）', extensions: ['txt'] }]
+      })
+      if (result.canceled || !result.filePath) return { success: false, canceled: true }
+      const isText = result.filePath.toLowerCase().endsWith('.txt')
+      const body = isText
+        ? `# BTViewer 任务清单（一行一个链接）\n${tasks.map((task) => task.source).join('\n')}\n`
+        : JSON.stringify({ app: 'BTViewer', version: 1, exportedAt: new Date().toISOString(), tasks }, null, 2)
+      writeFileSync(result.filePath, body, 'utf8')
+      return { success: true, data: { path: result.filePath, count: tasks.length } }
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) }
+    }
+  })
+
+  // 任务清单导入：兼容本应用导出的 .json 与「一行一个链接」的 .txt；已存在的来源会跳过
+  ipcMain.handle('tasks:import', async () => {
+    try {
+      if (!mainWindow || mainWindow.isDestroyed()) return { success: false, error: '窗口尚未准备好' }
+      const result = await dialog.showOpenDialog(mainWindow, {
+        title: '导入任务清单',
+        properties: ['openFile'],
+        filters: [{ name: '任务清单 / 链接清单', extensions: ['json', 'txt'] }]
+      })
+      if (result.canceled || !result.filePaths.length) return { success: false, canceled: true }
+      const file = result.filePaths[0]
+      const text = readFileSync(file, 'utf8')
+      let sources: string[] = []
+      if (file.toLowerCase().endsWith('.json')) {
+        const parsed = JSON.parse(text) as { tasks?: Array<{ source?: string }> }
+        sources = (parsed.tasks || []).map((task) => String(task.source || ''))
+      } else {
+        sources = text.split(/\r?\n/).map((line) => line.trim()).filter((line) => !!line && !line.startsWith('#'))
+      }
+      const summary = await torrentEngine.importTaskList(sources)
+      return { success: true, data: summary }
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) }
+    }
+  })
+
+  // 网络类设置（监听端口/DHT/PEX/LPD/加密）改动后需要重启 aria2 才能生效
+  ipcMain.handle('engine:restart', async () => {
+    try {
+      await torrentEngine.restartEngine()
+      return { success: true }
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) }
+    }
+  })
+
   ipcMain.handle('torrent:all-status', async () => torrentEngine.getAllStatuses())
+
+  // 全局统计（C2）：渲染层首次挂载时主动取一次，之后靠推送
+  ipcMain.handle('torrent:global-stat', async () => {
+    try { return { success: true, data: await torrentEngine.getGlobalStat() } } catch (error) { return { success: false, error: getErrorMessage(error) } }
+  })
 
   // yt-dlp 可用性检测（设置页展示状态与版本）；同时检测 JS 运行时（解 YouTube 签名挑战所需）
   ipcMain.handle('ytdlp:check', async (_event, customPath?: string) => {
@@ -280,12 +621,56 @@ function setupIPC() {
     setProgress(infoHash, filePath, position, duration)
   })
 
+  // 点系统通知跳转到对应任务
+  ipcMain.handle('clipboard:ignore', (_event, input: string) => {
+    clipboardWatcher?.ignore(String(input || ''))
+    return { success: true }
+  })
+
+  // 轻量更新检查（C7）：只读 GitHub Releases API 并比较版本，不做任何自动下载/安装
+  ipcMain.handle('update:check', async () => {
+    try {
+      const response = await fetch('https://api.github.com/repos/dsjerry/btviewer/releases/latest', {
+        headers: { 'user-agent': `BTViewer/${app.getVersion()}`, accept: 'application/vnd.github+json' },
+        signal: AbortSignal.timeout(8000)
+      })
+      if (!response.ok) return { success: false, error: response.status === 404 ? '仓库还没有发布 Release' : `GitHub 返回 ${response.status}` }
+      const release = parseLatestRelease(await response.text())
+      if (!release) return { success: false, error: '无法解析 Release 信息' }
+      const current = app.getVersion()
+      return { success: true, data: { ...release, current, hasUpdate: isNewerVersion(release.version, current) } }
+    } catch (error) {
+      return { success: false, error: `检查更新失败：${getErrorMessage(error)}` }
+    }
+  })
+
+  // 运行日志（C5）：只读日志目录里的文件，fileName 必须在列出的清单内
+  ipcMain.handle('logs:list', () => ({ success: true, data: listLogFiles() }))
+  ipcMain.handle('logs:read', (_event, maxLines?: number, fileName?: string) => {
+    try {
+      const known = listLogFiles().some((file) => file.name === fileName)
+      return { success: true, data: readLogTail(Number(maxLines) || 400, fileName && known ? fileName : undefined) }
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) }
+    }
+  })
+
+  // 一键诊断：版本/引擎/设置/任务概况/最近错误，拼成可复制文本（含脱敏）
+  ipcMain.handle('diagnostics:get', async () => {
+    try { return { success: true, data: await collectDiagnostics() } } catch (error) { return { success: false, error: getErrorMessage(error) } }
+  })
+
   ipcMain.handle('thumbs:get', (_event, keys: string[]) => {
     try { return { success: true, data: getThumbnails(Array.isArray(keys) ? keys.map(String).slice(0, 200) : []) } } catch (error) { return { success: false, error: getErrorMessage(error) } }
   })
 
   ipcMain.handle('thumbs:set', (_event, key: string, dataUrl: string) => {
     try { if (typeof key === 'string' && typeof dataUrl === 'string') saveThumbnail(key, dataUrl); return { success: true } } catch (error) { return { success: false, error: getErrorMessage(error) } }
+  })
+
+  // 内嵌封面（B7）：媒体文件自带封面时优先用它，比截帧更准也更快；没有则返回 null 由渲染层截帧兜底
+  ipcMain.handle('thumbs:cover', async (_event, infoHash: string, filePath: string) => {
+    try { return { success: true, data: await torrentEngine.extractCover(infoHash, filePath) } } catch (error) { return { success: false, error: getErrorMessage(error) } }
   })
 
   ipcMain.handle('feeds:get', () => ({ success: true, data: getFeeds() }))
@@ -346,15 +731,6 @@ function setupIPC() {
     return { success: true }
   })
 
-  ipcMain.handle('updater:check', async () => {
-    try { await checkForUpdates(); return { success: true } } catch (error) { return { success: false, error: getErrorMessage(error) } }
-  })
-
-  ipcMain.handle('updater:install', () => {
-    installUpdate()
-    return { success: true }
-  })
-
   ipcMain.handle('dialog:open-file', async () => {    if (!mainWindow || mainWindow.isDestroyed()) {
       return { success: false, error: '窗口尚未准备好' }
     }
@@ -393,7 +769,9 @@ function setupIPC() {
     saveSettings(next)
     applyNativeTheme(next.theme)
     applyLoginItem(next.launchOnStartup === true)
-    torrentEngine.configure({ downloadDir: next.downloadDir, trackers: next.trackers, maxConcurrentDownloads: next.maxConcurrentDownloads, speedLimit: next.speedLimit, httpSplit: next.httpSplit, ytdlpPath: next.ytdlpPath, proxy: next.proxy, ytdlpBrowser: next.ytdlpBrowser })
+    applyMagnetRegistration(next.registerMagnet === true)
+    applyClipboardWatch(next.clipboardWatch === true)
+    torrentEngine.configure(engineConfig(next))
     return { success: true, data: { ...next, downloadDir: torrentEngine.effectiveDownloadDir(), logDir: logger.logDir(), launchOnStartup: app.getLoginItemSettings().openAtLogin } }
   })
 
@@ -422,15 +800,64 @@ async function shutdown() {
   await torrentEngine.destroy()
 }
 
+// ── 单实例与外部输入（C1）──────────────────────────────────────────
+// 待处理的外部输入（双击种子 / 点网页磁力 / 命令行传入）：窗口就绪后立刻投递，否则排队
+const pendingInputs: string[] = []
+let rendererReady = false
+
+function deliverInputs(inputs: string[]) {
+  const list = collectLaunchInputs(inputs)
+  if (!list.length) return
+  for (const input of list) logger.info('launch', `收到外部输入：${input.slice(0, 120)}`)
+  if (!rendererReady || !mainWindow || mainWindow.isDestroyed()) { pendingInputs.push(...list); return }
+  showMainWindow()
+  for (const input of list) mainWindow.webContents.send('app:open-input', input)
+}
+
+function flushPendingInputs() {
+  rendererReady = true
+  while (pendingInputs.length) {
+    const input = pendingInputs.shift()!
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('app:open-input', input)
+  }
+}
+
+// 磁力协议注册：默认不动系统设置，由用户显式开启（否则会抢掉其它 BT 客户端的默认关联）。
+// 开发模式下必须显式带上入口脚本，否则注册出来的是 electron 可执行文件本身。
+function applyMagnetRegistration(enabled: boolean) {
+  try {
+    const devArgs = process.defaultApp && process.argv[1] ? [resolve(process.argv[1])] : []
+    if (enabled) app.setAsDefaultProtocolClient('magnet', process.execPath, devArgs)
+    else app.removeAsDefaultProtocolClient('magnet', process.execPath, devArgs)
+  } catch (error) { logger.warn('launch', `磁力协议注册失败：${getErrorMessage(error)}`) }
+}
+
 app.whenReady().then(async () => {
+  // 命令行诊断输出：打印到 stdout 后退出，不起窗口也不起 aria2（支持让用户直接发回这份文本）
+  if (isDiagnosticsRun) {
+    try { console.log(await collectDiagnostics()) } catch (error) { console.error(getErrorMessage(error)) }
+    app.quit()
+    return
+  }
+  // 没抢到单实例锁的进程直接退出，不做任何启动工作（不起 aria2、不建窗口）
+  if (!hasSingleInstanceLock) return
   Menu.setApplicationMenu(null)
   // Windows 通知需要与打包配置一致的 AppUserModelID
   app.setAppUserModelId('com.btviewer.app')
   logger.cleanup()
+  logger.info('launch', `启动参数：${process.argv.slice(1).join(' ')}`)
   const settings = loadSettings()
   applyNativeTheme(settings.theme)
-  torrentEngine.configure({ downloadDir: settings.downloadDir, trackers: settings.trackers, maxConcurrentDownloads: settings.maxConcurrentDownloads, speedLimit: settings.speedLimit, httpSplit: settings.httpSplit, ytdlpPath: settings.ytdlpPath, proxy: settings.proxy, ytdlpBrowser: settings.ytdlpBrowser })
+  applyMagnetRegistration(settings.registerMagnet === true)
+  applyClipboardWatch(settings.clipboardWatch === true)
+  torrentEngine.configure(engineConfig(settings))
   setupCompleteNotifications()
+  // 兼容播放进度：转封装/转码是长任务，进度实时推给渲染层
+  torrentEngine.onCompatProgress((event) => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('media:compat-progress', event)
+  })
+  // 全局上下行与任务数：推给渲染层侧边栏，同时刷新托盘提示
+  torrentEngine.onGlobalStat(forwardGlobalStat)
   setupIPC()
   try {
     const serverPort = await torrentEngine.startServer()
@@ -442,15 +869,23 @@ app.whenReady().then(async () => {
   createTray()
   // RSS 订阅轮询（后台静默进行，结果进 feeds.json）
   startPolling()
-  // 启动自动更新（仅打包版生效）；事件推送给渲染层展示
-  initUpdater((event) => {
-    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('updater:event', event)
-  })
+  // 首次启动时命令行里带的种子/磁力（含打包后的文件关联双击）
+  deliverInputs(process.argv.slice(1))
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) void createWindow()
   })
 })
+
+// 二次启动（双击种子、点磁力链接、重复点图标）：把输入交给已有实例，然后自己退出
+app.on('second-instance', (_event, argv) => {
+  showMainWindow()
+  deliverInputs(argv.slice(1))
+})
+
+// macOS 的协议/文件关联走事件而不是命令行
+app.on('open-url', (event, url) => { event.preventDefault(); deliverInputs([url]) })
+app.on('open-file', (event, path) => { event.preventDefault(); deliverInputs([path]) })
 
 app.on('window-all-closed', () => {
   void shutdown().finally(() => {

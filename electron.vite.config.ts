@@ -4,7 +4,9 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin()],
+    // fast-xml-parser 打进主进程包：electron-builder 只打包 release/app/**，不随包分发 node_modules，
+    // 若把它留作 external，安装后的应用会因找不到模块而启动失败
+    plugins: [externalizeDepsPlugin({ exclude: ['fast-xml-parser'] })],
     build: {
       outDir: resolve(__dirname, 'release/app/main'),
       emptyOutDir: true,

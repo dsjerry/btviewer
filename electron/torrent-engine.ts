@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessWithoutNullStreams } from 'child_process'
+import { spawn, execFile, type ChildProcessWithoutNullStreams } from 'child_process'
 import { createReadStream, existsSync, mkdirSync, readFileSync, rmdirSync, rmSync, statSync } from 'fs'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'http'
 import { app } from 'electron'
@@ -8,8 +8,13 @@ import { XMLParser } from 'fast-xml-parser'
 import { logger } from './logger'
 import { writeJsonAtomic } from './storage'
 import { clearDetectCache, detectBinary, detectJsRuntime, jsRuntimeArg, parseProgressLine, probeVideoSite, spawnYtdlpDownload, videoFormat, type VideoProbe } from './ytdlp-engine'
+import { PRIORITIZE_TAIL, ariaSize, prioritizePieceOption } from './stream-priority'
+import { compatCommand, parseFfmpegProgress, parseMediaInfo, parseProbeJson, planCompatPlayback, probeCommand, type CompatMode, type MediaStreams } from './media-transcode'
+import { parseByteRange } from './http-range'
+import { computeProgress, computeTimeRemaining, isFinished as isFinishedBytes, mapAriaState, retryDelayMs, selectFileIndexes } from './aria-status'
+import { extractEmbeddedCover } from './cover-art'
 import type { ChildProcess } from 'child_process'
-import type { TaskProtocol, TorrentFileInfo, TorrentStatus } from '../src/types'
+import type { CompatProgressEvent, GlobalStat, TaskProtocol, TorrentFileInfo, TorrentStatus } from '../src/types'
 
 const VIDEO_EXTENSIONS = ['.mp4', '.mkv', '.avi', '.mov', '.webm', '.flv', '.wmv', '.m4v', '.ts', '.rmvb']
 const AUDIO_EXTENSIONS = ['.mp3', '.flac', '.wav', '.aac', '.ogg', '.m4a', '.wma']
@@ -41,7 +46,8 @@ const DEFAULT_TRACKERS = [
 
 type RpcResponse<T> = { result?: T; error?: { code: number; message: string } }
 type AriaFile = { index: string; path: string; length: string; completedLength: string; selected: string }
-type AriaStatus = { gid: string; status: string; totalLength: string; completedLength: string; downloadSpeed: string; uploadSpeed: string; uploadLength?: string; connections: string; dir: string; errorMessage?: string; bittorrent?: { infoHash?: string; info?: { name?: string } }; info?: string; followedBy?: string[]; belongsTo?: string; files?: AriaFile[] }
+type AriaStatus = { gid: string; status: string; totalLength: string; completedLength: string; downloadSpeed: string; uploadSpeed: string; uploadLength?: string; connections: string; dir: string; errorMessage?: string; errorCode?: string; seeder?: string; bittorrent?: { infoHash?: string; info?: { name?: string }; announceList?: string[][] }; info?: string; followedBy?: string[]; belongsTo?: string; files?: AriaFile[] }
+type AriaPeer = { peerId: string; ip: string; port: string; bitfield: string; amChoking: string; peerChoking: string; downloadSpeed: string; uploadSpeed: string; seeder: string }
 
 // 带 cookies 时使用的 YouTube 客户端：web_embedded 可给到 4K（vp9/av01），对部分视频不可用时
 // yt-dlp 会自动回退到列表里的 web_safari（最高 1080p 的 HLS 单文件）。默认客户端在登录会话下只返回 360p
@@ -94,6 +100,14 @@ function getFileType(filename: string): TorrentFileInfo['type'] { const ext = fi
 function getErrorMessage(error: unknown) { return error instanceof Error ? error.message : String(error) }
 function isUnderRoot(root: string, path: string) { const rel = relative(resolve(root), resolve(path)); return !!rel && !rel.startsWith('..') && !isAbsolute(rel) }
 function toNumber(value: string | undefined) { return Number(value || 0) || 0 }
+// 只读取子进程输出、不因退出码拒绝：ffmpeg -i 探测本就会以退出码 1 结束
+function runCapture(binary: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve) => {
+    execFile(binary, args, { windowsHide: true, maxBuffer: 8 * 1024 * 1024 }, (error, stdout, stderr) => {
+      resolve({ stdout: stdout || '', stderr: stderr || (error ? getErrorMessage(error) : '') })
+    })
+  })
+}
 function infoHashFromMagnet(value: string) { return value.match(/[?&]xt=urn:btih:([a-z\d]{32,40})/i)?.[1]?.toLowerCase() || '' }
 // SRT 转 WebVTT 逻辑在 src/services/subtitle.ts（渲染层本地字幕复用同一实现）
 import { srtToVtt } from '../src/services/subtitle'
@@ -170,6 +184,8 @@ class TorrentEngine {
   private completeListener: ((infoHash: string, name: string) => void) | null = null
   // 全局状态广播：跨会话恢复的任务没有 per-task callback，靠它保证状态实时推送
   private globalListener: ((status: TorrentStatus) => void) | null = null
+  // 全局统计广播（C2）：侧边栏速度与托盘提示
+  private globalStatListener: ((stat: GlobalStat) => void) | null = null
   private downloadDirOverride = ''
   private trackerOverride = ''
   private maxConcurrent = 0
@@ -185,15 +201,46 @@ class TorrentEngine {
   // yt-dlp 的 cookies 来源浏览器（用户登录 YouTube 的浏览器；空则不带 cookies）
   private cookiesBrowser = ''
   // 任务持久化：key -> 任务来源。BT 用 infoHash，直链/视频任务用 sha1(source)；type 缺省 bt
-  private taskSources = new Map<string, { source: string; done: boolean; type: TaskProtocol; name?: string; client?: string; noCookies?: boolean; filePath?: string }>()
+  private taskSources = new Map<string, { source: string; done: boolean; type: TaskProtocol; name?: string; client?: string; noCookies?: boolean; filePath?: string; addedAt?: number }>()
   // 直链/视频任务的展示名（URL 文件名、视频标题）；BT 任务名来自 metadata
   private taskNames = new Map<string, string>()
   // yt-dlp 下载进程：任务 key -> 进程
   private videoProcs = new Map<string, ChildProcess>()
   private tasksFile = () => join(app.getPath('userData'), 'tasks.json')
+  // ── 网络与做种（A3/A5）：除限速/并发数外，这些是 aria2 的命令行选项，改动需要重启引擎生效
+  private listenPort = ''            // BT 监听端口（空 = aria2 默认 6881-6999）
+  private enableDht = true
+  private enablePex = true
+  private enableLpd = true
+  private btEncryption: 'auto' | 'require' = 'auto'
+  private seedMode: 'off' | 'ratio' | 'time' = 'off'
+  private seedRatio = 1
+  private seedMinutes = 60
+  private streamPriority = true      // 边下边播：为新 BT 任务预置 head/tail 分片优先
+  private autoRetry = true           // 失败自动重试
+  private maxRetries = 3
+  // 网络类设置改动后，需重启 aria2 才能生效（设置页据此提示）
+  private engineRestartRequired = false
+  // 队列位置：aria2 只在 tellWaiting 的顺序里体现排队位次，这里每秒快照一次供 UI 展示/调整
+  private queuePositions = new Map<string, number>()
+  // 每个任务的自动重试次数（成功完成后清零）
+  private retryCounts = new Map<string, number>()
+  private retryTimers = new Map<string, NodeJS.Timeout>()
+  // 「全部暂停」时被本次暂停的任务，便于「恢复全部」只恢复这些，不误启动用户自己暂停的任务
+  private pauseAllHashes = new Set<string>()
+  // ── 兼容播放（B1）：ffmpeg 转封装/转码会话（内置播放器解不了的编码用它兜底）
+  private compatProcs = new Map<string, ChildProcess>()
+  private compatFiles = new Map<string, { path: string; complete: boolean; mode: CompatMode; infoHash: string }>()
+  private compatListener: ((payload: CompatProgressEvent) => void) | null = null
 
   // 设置页写入的持久化配置：未启动时仅记录（spawn 时生效），已启动则热应用到 aria2
-  configure(options: { downloadDir?: string; trackers?: string; maxConcurrentDownloads?: number; speedLimit?: string; httpSplit?: number; ytdlpPath?: string; proxy?: string; ytdlpBrowser?: string }) {
+  configure(options: {
+    downloadDir?: string; trackers?: string; maxConcurrentDownloads?: number; speedLimit?: string; httpSplit?: number
+    ytdlpPath?: string; proxy?: string; ytdlpBrowser?: string
+    listenPort?: string; enableDht?: boolean; enablePex?: boolean; enableLpd?: boolean; btEncryption?: 'auto' | 'require'
+    seedMode?: 'off' | 'ratio' | 'time'; seedRatio?: number; seedMinutes?: number
+    streamPriority?: boolean; autoRetry?: boolean; maxRetries?: number
+  }) {
     if (options.downloadDir) {
       this.downloadDirOverride = options.downloadDir
       mkdirSync(options.downloadDir, { recursive: true })
@@ -220,7 +267,47 @@ class TorrentEngine {
     }
     if (options.proxy !== undefined) this.proxy = options.proxy.trim()
     if (options.ytdlpBrowser !== undefined) this.cookiesBrowser = options.ytdlpBrowser.trim()
+    // 以下都是 aria2 的命令行选项：运行中改不了，只能标记「需重启引擎生效」
+    const networkBefore = this.networkSignature()
+    if (options.listenPort !== undefined) this.listenPort = options.listenPort.trim()
+    if (options.enableDht !== undefined) this.enableDht = options.enableDht
+    if (options.enablePex !== undefined) this.enablePex = options.enablePex
+    if (options.enableLpd !== undefined) this.enableLpd = options.enableLpd
+    if (options.btEncryption !== undefined) this.btEncryption = options.btEncryption === 'require' ? 'require' : 'auto'
+    if (networkBefore !== this.networkSignature()) this.engineRestartRequired = !!this.process
+    // 做种策略是「下载选项」，只影响之后添加的任务（aria2 不允许改已存在的任务选项）
+    if (options.seedMode !== undefined) this.seedMode = ['off', 'ratio', 'time'].includes(options.seedMode) ? options.seedMode : 'off'
+    if (options.seedRatio !== undefined && Number.isFinite(options.seedRatio)) this.seedRatio = Math.min(100, Math.max(0, options.seedRatio))
+    if (options.seedMinutes !== undefined && Number.isFinite(options.seedMinutes)) this.seedMinutes = Math.min(60 * 24 * 30, Math.max(1, Math.floor(options.seedMinutes)))
+    if (options.streamPriority !== undefined) this.streamPriority = options.streamPriority
+    if (options.autoRetry !== undefined) this.autoRetry = options.autoRetry
+    if (options.maxRetries !== undefined && Number.isFinite(options.maxRetries)) this.maxRetries = Math.min(10, Math.max(0, Math.floor(options.maxRetries)))
   }
+
+  private networkSignature() { return [this.listenPort, this.enableDht, this.enablePex, this.enableLpd, this.btEncryption].join('|') }
+
+  // 网络类设置改动后（或用户手动触发）重启 aria2 进程；任务由 exit 处理器自动 respawn + 从 tasks.json 恢复
+  async restartEngine() {
+    if (!this.process) { await this.startServer(); return }
+    this.engineRestartRequired = false
+    const child = this.process
+    child.kill()
+    const deadline = Date.now() + 15000
+    while (this.process === child && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 200))
+    if (this.process === child) throw new Error('下载引擎重启超时')
+  }
+
+  // 设置页展示的网络状态：实际端口要问 aria2（默认端口是它自己选的）
+  async networkStatus() {
+    const base = { listenPort: this.listenPort, enableDht: this.enableDht, enablePex: this.enablePex, enableLpd: this.enableLpd, btEncryption: this.btEncryption, restartRequired: this.engineRestartRequired, running: !!this.process, version: '', actualPort: '' }
+    if (!this.process) return base
+    try {
+      const version = await this.rpc<{ version: string; enabledFeatures: string[] }>('getVersion', [])
+      const options = await this.rpc<Record<string, string>>('getGlobalOption', [])
+      return { ...base, version: version.version, actualPort: options['listen-port'] || '' }
+    } catch { return base }
+  }
+
 
   effectiveDownloadDir() { return this.downloadDirOverride || this.dataDir || join(app.getPath('userData'), 'aria2-downloads') }
 
@@ -228,17 +315,25 @@ class TorrentEngine {
 
   onStatusBroadcast(listener: (status: TorrentStatus) => void) { this.globalListener = listener }
 
+  onGlobalStat(listener: (stat: GlobalStat) => void) { this.globalStatListener = listener }
+
+  // aria2 的全局统计：整体上下行速率与活动/等待/已停止任务数（每秒随状态刷新一起取）
+  async getGlobalStat(): Promise<GlobalStat> {
+    const raw = await this.rpc<{ downloadSpeed: string; uploadSpeed: string; numActive: string; numWaiting: string; numStopped: string }>('getGlobalStat', [])
+    return { downloadSpeed: toNumber(raw.downloadSpeed), uploadSpeed: toNumber(raw.uploadSpeed), numActive: toNumber(raw.numActive), numWaiting: toNumber(raw.numWaiting), numStopped: toNumber(raw.numStopped) }
+  }
+
   private persistTasks() {
     try { writeJsonAtomic(this.tasksFile(), { tasks: [...this.taskSources].map(([hash, task]) => ({ hash, ...task })) }, 2) } catch (error) { logger.error('tasks', `persist failed: ${getErrorMessage(error)}`) }
   }
 
   private restoreTasks() {
     try {
-      const raw = JSON.parse(readFileSync(this.tasksFile(), 'utf8')) as { tasks?: Array<{ hash: string; source: string; type?: TaskProtocol; name?: string; client?: string; noCookies?: boolean; filePath?: string; done?: boolean }> }
+      const raw = JSON.parse(readFileSync(this.tasksFile(), 'utf8')) as { tasks?: Array<{ hash: string; source: string; type?: TaskProtocol; name?: string; client?: string; noCookies?: boolean; filePath?: string; done?: boolean; addedAt?: number }> }
       for (const task of raw.tasks || []) {
         if (!task.source || this.taskSources.has(task.hash)) continue
         const type: TaskProtocol = task.type || 'bt'
-        this.taskSources.set(task.hash, { source: task.source, done: !!task.done, type, name: task.name, client: task.client, noCookies: task.noCookies, filePath: task.filePath })
+        this.taskSources.set(task.hash, { source: task.source, done: !!task.done, type, name: task.name, client: task.client, noCookies: task.noCookies, filePath: task.filePath, addedAt: task.addedAt })
         if (task.name) this.taskNames.set(task.hash, task.name)
         logger.info('tasks', `restoring ${task.hash}${task.done ? ' (complete)' : ''}`)
         if (type === 'video') {
@@ -281,6 +376,7 @@ class TorrentEngine {
   private async start(): Promise<number> {
     this.dataDir = this.downloadDirOverride || join(app.getPath('userData'), 'aria2-downloads')
     mkdirSync(this.dataDir, { recursive: true })
+    this.cleanCompatDir()
     this.server = createServer((request, response) => this.handleStream(request, response))
     await new Promise<void>((resolve, reject) => { this.server?.once('error', reject); this.server?.listen(0, '127.0.0.1', () => resolve()) })
     const address = this.server.address()
@@ -308,7 +404,15 @@ class TorrentEngine {
     delete env.all_proxy
     delete env.ALL_PROXY
     if (process.platform === 'linux' && binary !== 'aria2c') env.LD_LIBRARY_PATH = `${dirname(binary)}${process.env.LD_LIBRARY_PATH ? `:${process.env.LD_LIBRARY_PATH}` : ''}`
-    const args = ['--enable-rpc=true', '--rpc-listen-all=false', `--rpc-listen-port=${rpcPort}`, `--rpc-secret=${this.secret}`, `--dir=${this.dataDir}`, '--continue=true', '--allow-overwrite=true', '--check-integrity=true', '--bt-enable-lpd=true', '--enable-dht=true', '--enable-peer-exchange=true', '--bt-enable-hook-after-hash-check=true', '--seed-time=0', '--file-allocation=none']
+    const args = ['--enable-rpc=true', '--rpc-listen-all=false', `--rpc-listen-port=${rpcPort}`, `--rpc-secret=${this.secret}`, `--dir=${this.dataDir}`, '--continue=true', '--allow-overwrite=true', '--check-integrity=true', '--bt-enable-hook-after-hash-check=true', '--file-allocation=none']
+    // ── 网络发现与连通性（A3）：固定监听端口便于路由器端口映射；DHT/PEX/LPD 可按网络环境关闭
+    if (this.listenPort) args.push(`--listen-port=${this.listenPort}`)
+    args.push(`--enable-dht=${this.enableDht}`, `--enable-peer-exchange=${this.enablePex}`, `--bt-enable-lpd=${this.enableLpd}`)
+    if (this.btEncryption === 'require') args.push('--bt-require-crypto=true', '--bt-min-crypto-level=arc4')
+    // ── 做种策略（A5）：默认下完即停；按分享率或时长做种交给 aria2 自己判定
+    args.push(...this.seedArgs())
+    // ── 失败重试（A8）：直链/视频站点的 HTTP 重试交给 aria2；BT 侧由引擎看门狗重试
+    args.push('--max-tries=' + String(this.autoRetry ? Math.max(1, this.maxRetries) : 1), '--retry-wait=' + String(this.autoRetry ? 5 : 0))
     // 部分网络屏蔽默认 DHT 引导节点，允许通过环境变量指定可达的引导入口
     if (process.env.ARIA2_DHT_ENTRY_POINT) args.push(`--dht-entry-point=${process.env.ARIA2_DHT_ENTRY_POINT}`)
     if (process.env.ARIA2_DHT_ENTRY_POINT6) args.push(`--dht-entry-point6=${process.env.ARIA2_DHT_ENTRY_POINT6}`)
@@ -452,11 +556,13 @@ class TorrentEngine {
     }
     const type: TaskProtocol = /^ftp:\/\//i.test(url) ? 'ftp' : 'http'
     // 直链任务走代理（设置页配置）；BT/DHT 不走代理，故不设全局
-    const options = { split: String(this.httpSplit), 'max-connection-per-server': String(this.httpSplit), 'min-split-size': '1M', ...(this.proxy ? { 'all-proxy': this.proxy } : {}), ...(opts.dir ? { dir: opts.dir } : {}) }
+    // 媒体文件按顺序分片下载（stream-piece-selector 仅对 HTTP/FTP 分片下载有效），播放时不必等后半段
+    const isMedia = DIRECT_MEDIA_EXTENSIONS.some((ext) => url.toLowerCase().split(/[?#]/)[0].endsWith(ext)) && !/\.(zip|rar|7z|gz|iso|exe|apk|dmg|pdf|epub|txt|xml|json)$/i.test(url.toLowerCase().split(/[?#]/)[0])
+    const options = { split: String(this.httpSplit), 'max-connection-per-server': String(this.httpSplit), 'min-split-size': '1M', ...(isMedia && this.streamPriority ? { 'stream-piece-selector': 'inorder' } : {}), ...(this.proxy ? { 'all-proxy': this.proxy } : {}), ...(opts.dir ? { dir: opts.dir } : {}) }
     const gid = await this.rpc<string>('addUri', [uris, options])
     // 保留已有条目的 done/name（aria2 重启恢复已完成任务时不丢标记）
     const prevTask = this.taskSources.get(key)
-    this.taskSources.set(key, { source: url, done: prevTask?.done || false, type, name: opts.name || prevTask?.name })
+    this.taskSources.set(key, { source: url, done: prevTask?.done || false, type, name: opts.name || prevTask?.name, addedAt: prevTask?.addedAt || Date.now() })
     this.taskNames.set(key, opts.name || prevTask?.name || directName(url))
     this.persistTasks()
     const status = await this.refreshGid(gid, key, onStatus)
@@ -489,7 +595,7 @@ class TorrentEngine {
       return this.toTorrentStatus(key, existing)
     }
     const dir = opts.dir || this.dataDir
-    this.taskSources.set(key, { source: url, done: false, type: 'video', name: probe.title, client: probe.client, noCookies: probe.noCookies })
+    this.taskSources.set(key, { source: url, done: false, type: 'video', name: probe.title, client: probe.client, noCookies: probe.noCookies, addedAt: Date.now() })
     this.taskNames.set(key, probe.title)
     this.persistTasks()
     // 合成与 aria2 一致的状态结构，复用推送、展示与持久化链路
@@ -703,7 +809,9 @@ class TorrentEngine {
       return this.toTorrentStatus(hash, this.statuses.get(hash) || existing)
     }
     // dir：任务级保存目录（RSS 按季归类用），覆盖全局下载目录
-    const options = { 'seed-time': '0', 'bt-tracker': trackerList(this.trackerOverride), ...(opts.dir ? { dir: opts.dir } : {}), ...(isTorrentFile ? { pause: 'true' } : { 'pause-metadata': 'true', 'bt-save-metadata': 'true' }) }
+    // seedOptions：做种策略是下载选项，只能建任务时给定
+    // bt-prioritize-piece：边下边播优化，head/tail 优先保证起播（MP4 的 moov 可能在尾部）
+    const options = { ...this.seedOptions(), 'bt-tracker': trackerList(this.trackerOverride), ...(this.streamPriority ? { 'bt-prioritize-piece': prioritizePieceOption() } : {}), ...(opts.dir ? { dir: opts.dir } : {}), ...(isTorrentFile ? { pause: 'true' } : { 'pause-metadata': 'true', 'bt-save-metadata': 'true' }) }
     const gid = await this.rpc<string>('addUri', [[id], options])
     if (!isTorrentFile) this.metadataGids.add(gid)
     const first = await this.refreshGid(gid, hash || gid, onStatus)
@@ -712,7 +820,7 @@ class TorrentEngine {
       this.gidHashes.set(gid, key)
       if (onStatus) this.callbacks.set(key, onStatus)
     }
-    this.taskSources.set(key, { source: id, done: false, type: 'bt' })
+    this.taskSources.set(key, { source: id, done: false, type: 'bt', addedAt: Date.now() })
     this.persistTasks()
     if (isTorrentFile) return this.toTorrentStatus(key, first)
     if (opts.wait !== false) await this.waitForMetadata(key)
@@ -752,11 +860,8 @@ class TorrentEngine {
     if (status.followedBy?.length) status = await this.refreshGid(status.followedBy[0], infoHash.toLowerCase())
     const files = status.files || []
     if (!files.length) throw new Error('种子文件信息尚未准备完成')
-    let indexes = files.map((file) => file.index)
-    if (filePaths?.length) {
-      indexes = files.filter((file) => filePaths.includes(file.path) || filePaths.includes(basename(file.path))).map((file) => file.index)
-      if (!indexes.length) throw new Error('未找到指定的媒体文件')
-    }
+    const indexes = selectFileIndexes(files, filePaths, basename)
+    if (filePaths?.length && !indexes.length) throw new Error('未找到指定的媒体文件')
     // 已完成的任务无需也无法再改选项，文件本身已在磁盘上
     if (status.status !== 'complete') {
       await this.rpc('changeOption', [status.gid, { 'select-file': indexes.join(',') }])
@@ -765,6 +870,334 @@ class TorrentEngine {
     }
     await this.refreshGid(status.gid, infoHash)
   }
+
+  // ── 做种策略（A5）──────────────────────────────────────────────
+  // aria2 的 --seed-time / --seed-ratio 是「下载选项」：命令行给定的是默认值，任务建好就改不了
+  private seedArgs() {
+    if (this.seedMode === 'ratio') return [`--seed-ratio=${this.seedRatio}`]
+    if (this.seedMode === 'time') return [`--seed-time=${this.seedMinutes}`]
+    return ['--seed-time=0']
+  }
+
+  private seedOptions() {
+    if (this.seedMode === 'ratio') return { 'seed-ratio': String(this.seedRatio) }
+    if (this.seedMode === 'time') return { 'seed-time': String(this.seedMinutes) }
+    return { 'seed-time': '0' }
+  }
+
+  // ── 边下边播（A1）──────────────────────────────────────────────
+  // 播放开始时把「已播放位置 + 预读窗口」标成优先分片。aria2 只接受对等待中任务改
+  // bt-prioritize-piece；正在下载的任务会报错，此时静默忽略——任务建立时已带 head/tail 优先，
+  // 相比默认的「最稀有分片优先」，顺序播放的等待时间显著更短。
+  async prioritizeStream(infoHash: string, offsetBytes = 0) {
+    if (!this.streamPriority) return { applied: false, option: '' }
+    const status = await this.findStatus(infoHash)
+    const option = prioritizePieceOption(offsetBytes)
+    const target = status.followedBy?.length ? await this.refreshGid(status.followedBy[0], infoHash.toLowerCase()) : status
+    try {
+      await this.rpc('changeOption', [target.gid, { 'bt-prioritize-piece': option }])
+      logger.info('stream', `prioritize ${infoHash} → ${option}`)
+      return { applied: true, option }
+    } catch (error) {
+      logger.info('stream', `prioritize skipped for ${infoHash}: ${getErrorMessage(error)}`)
+      return { applied: false, option }
+    }
+  }
+
+  // 已下载分片之上的播放位置换算（详情面板与播放器共用）
+  static prioritizeOptionFor(offsetBytes: number) { return prioritizePieceOption(offsetBytes) }
+  static prioritizeTailSize() { return ariaSize(PRIORITIZE_TAIL) }
+
+  // ── 任务级操作（A4）────────────────────────────────────────────
+  // 单任务限速：aria2.changeOption 的 max-download-limit 对活动中任务同样有效
+  async setTaskSpeedLimit(infoHash: string, limit: string) {
+    const status = await this.findStatus(infoHash)
+    await this.rpc('changeOption', [status.gid, { 'max-download-limit': limit.trim() || '0' }])
+    await this.refreshGid(status.gid, infoHash)
+  }
+
+  // 队列顺序：aria2 只对等待中的任务提供位置（tellWaiting 的下标即位置）
+  async moveTask(infoHash: string, action: 'top' | 'up' | 'down') {
+    const hash = infoHash.toLowerCase()
+    const waiting = await this.rpc<AriaStatus[]>('tellWaiting', [0, 1000]).catch(() => [])
+    const index = waiting.findIndex((item) => item.gid === hash || this.gidHashes.get(item.gid) === hash)
+    if (index < 0) throw new Error('只有排队中的任务可以调整顺序')
+    if (action === 'top') { await this.rpc('changePosition', [waiting[index].gid, 0, 'POS_SET']); return }
+    if (action === 'up') {
+      if (index === 0) return
+      await this.rpc('changePosition', [waiting[index].gid, index - 1, 'POS_SET'])
+      return
+    }
+    if (index >= waiting.length - 1) return
+    await this.rpc('changePosition', [waiting[index].gid, 1, 'POS_CUR'])
+  }
+
+  // 全部暂停：记录本次暂停的任务，避免「恢复全部」把用户自己暂停或尚未选择文件的任务一起启动
+  async pauseAll() {
+    this.pauseAllHashes.clear()
+    for (const [hash, status] of this.statuses) {
+      const type = this.taskSources.get(hash)?.type || 'bt'
+      if (type === 'video') { this.pauseVideo(hash); this.pauseAllHashes.add(hash); continue }
+      if (status.status === 'active' || status.status === 'waiting') this.pauseAllHashes.add(hash)
+    }
+    await this.rpc('pauseAll', [])
+    await this.refreshStatuses()
+    return [...this.pauseAllHashes]
+  }
+
+  async resumeAll() {
+    const hashes = [...this.pauseAllHashes]
+    this.pauseAllHashes.clear()
+    for (const hash of hashes) await this.resumeTorrent(hash).catch((error) => logger.error('tasks', `resume failed for ${hash}: ${getErrorMessage(error)}`))
+    return hashes
+  }
+
+  // 失败重试（A8）：清掉 aria2 里的结果记录（保留磁盘数据）后按原来源重新入队，
+  // --continue=true + --check-integrity=true 会复用已下载分片
+  async retryTorrent(infoHash: string) {
+    const hash = infoHash.toLowerCase()
+    const task = this.taskSources.get(hash) || this.taskSources.get(infoHash)
+    if (!task) throw new Error('任务来源已丢失，无法重试')
+    const status = this.statuses.get(hash) || this.statuses.get(infoHash)
+    for (const gid of new Set([...(status ? [status.gid] : []), ...(status?.followedBy || [])])) {
+      await this.rpc('remove', [gid]).catch(() => undefined)
+      await this.rpc('removeDownloadResult', [gid]).catch(() => undefined)
+      this.gidHashes.delete(gid)
+      this.metadataGids.delete(gid)
+    }
+    this.statuses.delete(hash)
+    this.statuses.delete(infoHash)
+    this.retryCounts.delete(hash)
+    this.taskSources.delete(hash)
+    this.taskSources.delete(infoHash)
+    this.persistTasks()
+    const restored = await this.addTask(task.source, undefined, { wait: false })
+    this.taskNames.set(restored.infoHash, task.name || restored.name)
+    return restored
+  }
+
+  // ── 批量添加与清单导入导出（A6/A7）──────────────────────────────
+  // 批量入队：直链/视频任务立即开始下载；BT 任务只登记（解析后不自动下载，等用户在媒体库里选文件）。
+  // 不等待 metadata，避免一次性粘贴十几个链接时逐串等待。
+  async addTasksBatch(inputs: string[]) {
+    const errors: string[] = []
+    let added = 0
+    let bt = 0
+    for (const input of inputs) {
+      const value = input.trim()
+      if (!value) continue
+      try {
+        const status = await this.addTask(value, undefined, { wait: false })
+        added++
+        if ((status.type || 'bt') === 'bt') bt++
+      } catch (error) {
+        errors.push(`${value.slice(0, 60)}：${getErrorMessage(error)}`)
+      }
+    }
+    return { added, bt, failed: errors.length, errors }
+  }
+
+  hasTask(source: string) {
+    const value = source.trim()
+    if (!value) return false
+    const hash = infoHashFromMagnet(value)
+    for (const task of this.taskSources.values()) {
+      if (task.source.trim() === value) return true
+      if (hash && infoHashFromMagnet(task.source) === hash) return true
+    }
+    return [...this.statuses.keys()].some((key) => key === hash)
+  }
+
+  // 任务清单导出：只含「怎么再下一次」的信息，不含文件内容
+  exportTaskList() {
+    return [...this.taskSources.entries()]
+      .map(([hash, task]) => ({ hash, source: task.source, type: task.type, name: task.name || this.taskNames.get(hash) || '', done: !!task.done, addedAt: task.addedAt || 0 }))
+      .sort((a, b) => b.addedAt - a.addedAt)
+  }
+
+  // 清单导入：已存在的来源按重复跳过，其余按原类型重新入队（BT 不自动开始下载）
+  async importTaskList(sources: string[]) {
+    const errors: string[] = []
+    let added = 0
+    let skipped = 0
+    for (const source of sources) {
+      const value = source.trim()
+      if (!value) continue
+      if (this.hasTask(value)) { skipped++; continue }
+      try {
+        await this.addTask(value, undefined, { wait: false })
+        added++
+      } catch (error) {
+        errors.push(`${value.slice(0, 60)}：${getErrorMessage(error)}`)
+      }
+    }
+    return { added, skipped, failed: errors.length, errors }
+  }
+
+  // ── 兼容播放（B1）──────────────────────────────────────────────
+  // 思路：内置播放器（Chromium）解不了的编码，用 ffmpeg 生成一个可播放的副本放到下载目录下的
+  // .btviewer-compat/（与源文件同卷，避免占用系统盘），再由 /compat/:id 路由以 Range 方式喂给播放器。
+  onCompatProgress(listener: (payload: CompatProgressEvent) => void) { this.compatListener = listener }
+
+  private emitCompat(payload: CompatProgressEvent) { this.compatListener?.(payload) }
+
+  // 完成后的动作需要「还有多少任务在下载」（做种中的不算）与「完成的文件在哪」
+  pendingCount() {
+    let count = 0
+    for (const [hash, status] of this.statuses) {
+      const state = this.toTorrentStatus(hash, status).status
+      if (state === 'downloading' || state === 'connecting' || state === 'parsing') count++
+    }
+    return count
+  }
+
+  taskSnapshot(infoHash: string): { name: string; saveDir: string; paths: Array<{ path: string; kind: TorrentFileInfo['type'] }> } | null {
+    const hash = infoHash.toLowerCase()
+    const status = this.statuses.get(hash) || this.statuses.get(infoHash)
+    if (!status) return null
+    const task = this.taskSources.get(hash) || this.taskSources.get(infoHash)
+    return {
+      name: status.bittorrent?.info?.name || this.taskNames.get(hash) || task?.name || hash,
+      saveDir: status.dir || this.dataDir,
+      paths: (status.files || []).map((file) => ({ path: file.path, kind: getFileType(file.path) }))
+    }
+  }
+
+  private compatDir() {
+    const dir = join(this.effectiveDownloadDir(), '.btviewer-compat')
+    mkdirSync(dir, { recursive: true })
+    return dir
+  }
+
+  // 内嵌封面（B7）：优先于截帧缩略图；路径必须是该任务已知的文件，避免渲染层任意读盘
+  async extractCover(infoHash: string, filePath: string) {
+    const file = this.findMediaFile(infoHash, filePath)
+    return extractEmbeddedCover(file.path)
+  }
+
+  private async resolveFfmpeg() { return detectBinary(undefined, 'ffmpeg', join(app.getPath('userData'), 'bin')) }
+
+  // ffprobe 优先（结构化 JSON，不受本地化影响）；缺失时退回解析 ffmpeg -i 的 stderr
+  private async probeMedia(ffmpeg: string, input: string): Promise<MediaStreams> {
+    const name = process.platform === 'win32' ? 'ffprobe.exe' : 'ffprobe'
+    const ffprobe = join(dirname(ffmpeg), name)
+    if (existsSync(ffprobe)) {
+      const { stdout } = await runCapture(ffprobe, probeCommand(input))
+      try { return parseProbeJson(stdout) } catch { /* 换 ffmpeg -i 解析 */ }
+    }
+    const { stderr } = await runCapture(ffmpeg, ['-hide_banner', '-i', input])
+    return parseMediaInfo(stderr)
+  }
+
+  private findMediaFile(infoHash: string, filePath: string) {
+    const status = this.statuses.get(infoHash.toLowerCase())
+    const file = status?.files?.find((item) => item.path === filePath || basename(item.path) === filePath)
+    if (!status || !file) throw new Error('媒体文件尚未准备完成')
+    return file
+  }
+
+  // 先给出方案（编码、原因、时长、音轨清单），用户确认后再真正开跑
+  async compatPlan(infoHash: string, filePath: string, audioIndex = 0) {
+    const file = this.findMediaFile(infoHash, filePath)
+    const ffmpeg = await this.resolveFfmpeg()
+    if (!ffmpeg) return { available: false, mode: 'copy' as CompatMode, reason: '未找到 ffmpeg，可在设置页一键安装后再试', durationSeconds: 0, sizeBytes: toNumber(file.length), audioTracks: [] }
+    const streams = await this.probeMedia(ffmpeg, file.path)
+    const index = Number.isFinite(audioIndex) && audioIndex > 0 && audioIndex < streams.audioTracks.length ? Math.floor(audioIndex) : 0
+    const plan = planCompatPlayback(streams, index)
+    const note = streams.audioTracks.length > 1 ? `（保留第 ${index + 1} 条音轨 / 共 ${streams.audioTracks.length} 条）` : ''
+    return { available: true, mode: plan.mode, reason: `${plan.reason}${note}`, durationSeconds: streams.durationSeconds, sizeBytes: toNumber(file.length), audioTracks: streams.audioTracks }
+  }
+
+  async compatStart(infoHash: string, filePath: string, audioIndex = 0) {
+    const file = this.findMediaFile(infoHash, filePath)
+    const ffmpeg = await this.resolveFfmpeg()
+    if (!ffmpeg) throw new Error('未找到 ffmpeg，可在设置页一键安装后再试')
+    const streams = await this.probeMedia(ffmpeg, file.path)
+    const index = Number.isFinite(audioIndex) && audioIndex > 0 && audioIndex < streams.audioTracks.length ? Math.floor(audioIndex) : 0
+    const plan = planCompatPlayback(streams, index)
+    const id = randomBytes(8).toString('hex')
+    const output = join(this.compatDir(), `${id}.${plan.container}`)
+    this.compatFiles.set(id, { path: output, complete: false, mode: plan.mode, infoHash: infoHash.toLowerCase() })
+    const child = spawn(ffmpeg, compatCommand(file.path, output, plan, index), { windowsHide: true })
+    this.compatProcs.set(id, child)
+    let buffer = ''
+    let finished = false
+    child.stdout?.on('data', (chunk: Buffer) => {
+      buffer += chunk.toString()
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+      for (const line of lines) {
+        const parsed = parseFfmpegProgress(line.trim())
+        if (parsed.done) {
+          const entry = this.compatFiles.get(id)
+          if (entry) entry.complete = true
+        } else if (parsed.outSeconds !== undefined && streams.durationSeconds > 0) {
+          this.emitCompat({ id, percent: Math.min(99, Math.round((parsed.outSeconds / streams.durationSeconds) * 100)), phase: 'running', mode: plan.mode })
+        }
+      }
+    })
+    child.stderr?.on('data', (chunk: Buffer) => logger.info('compat', chunk.toString().trim().slice(0, 300)))
+    const settle = (phase: 'done' | 'error', message?: string) => {
+      if (finished) return
+      finished = true
+      this.compatProcs.delete(id)
+      if (phase === 'done') {
+        const entry = this.compatFiles.get(id)
+        if (entry) entry.complete = true
+      }
+      this.emitCompat({ id, percent: phase === 'done' ? 100 : 0, phase, mode: plan.mode, message })
+    }
+    child.on('error', (error) => settle('error', getErrorMessage(error)))
+    child.on('exit', (code) => settle(code === 0 ? 'done' : 'error', code === 0 ? undefined : `ffmpeg 退出码 ${code}`))
+    return { id, mode: plan.mode, container: plan.container, reason: plan.reason, durationSeconds: streams.durationSeconds, outputSize: toNumber(file.length) }
+  }
+
+  // 生成完成后才给出播放地址；文件必须落在下载目录内（与 /stream 同一套越权检查）
+  compatUrl(id: string) {
+    const entry = this.compatFiles.get(id)
+    if (!entry || !entry.complete) throw new Error('转码尚未完成')
+    if (!isUnderRoot(resolve(this.effectiveDownloadDir()), resolve(entry.path))) throw new Error('转码文件不在下载目录内')
+    return `http://127.0.0.1:${this.serverPort}/compat/${encodeURIComponent(id)}?token=${this.streamToken}`
+  }
+
+  compatCancel(id: string) {
+    const child = this.compatProcs.get(id)
+    if (child) { try { child.kill() } catch { /* 已退出 */ } this.compatProcs.delete(id) }
+    const entry = this.compatFiles.get(id)
+    if (entry) { try { rmSync(entry.path, { force: true }) } catch { /* 文件可能还没生成 */ } this.compatFiles.delete(id) }
+    // 取消由调用方自行收尾状态，这里不再推送事件（否则会把已经收起的浮层重新点亮成错误）
+  }
+
+  // 任务被移除时清掉它的兼容副本，避免转码产物留在下载目录里没人管
+  private removeCompatFilesFor(infoHash: string) {
+    const hash = infoHash.toLowerCase()
+    for (const [id, entry] of [...this.compatFiles]) {
+      if (entry.infoHash !== hash) continue
+      const child = this.compatProcs.get(id)
+      if (child) { try { child.kill() } catch { /* 已退出 */ } this.compatProcs.delete(id) }
+      try { rmSync(entry.path, { force: true }) } catch { /* 文件可能还没生成 */ }
+      this.compatFiles.delete(id)
+    }
+  }
+
+  // 启动时清掉上次遗留的兼容副本（派生数据，可随时重建）
+  private cleanCompatDir() {
+    try { rmSync(join(this.effectiveDownloadDir(), '.btviewer-compat'), { recursive: true, force: true }) } catch { /* 目录不存在或被占用 */ }
+  }
+
+  // ── 诊断（A2）──────────────────────────────────────────────────
+  async taskPeers(infoHash: string) {
+    const status = await this.findStatus(infoHash)
+    const target = status.followedBy?.length ? await this.refreshGid(status.followedBy[0], infoHash.toLowerCase()) : status
+    const peers = await this.rpc<AriaPeer[]>('getPeers', [target.gid]).catch(() => [])
+    return peers.map((peer) => ({ ip: peer.ip, port: toNumber(peer.port), downloadSpeed: toNumber(peer.downloadSpeed), uploadSpeed: toNumber(peer.uploadSpeed), seeder: peer.seeder === 'true', choked: peer.peerChoking === 'true' }))
+  }
+
+  async taskTrackers(infoHash: string) {
+    const status = await this.findStatus(infoHash)
+    return (status.bittorrent?.announceList || []).flat().filter(Boolean)
+  }
+
   async pauseTorrent(infoHash: string) {
     const status = await this.findStatus(infoHash)
     if (this.taskSources.get(status.gid)?.type === 'video' || this.taskSources.get(infoHash.toLowerCase())?.type === 'video') return this.pauseVideo(infoHash.toLowerCase())
@@ -796,6 +1229,7 @@ class TorrentEngine {
     this.taskSources.delete(hash)
     this.taskSources.delete(infoHash)
     this.persistTasks()
+    this.removeCompatFilesFor(hash)
     for (const gid of gids) this.gidHashes.delete(gid)
     if (destroy) this.removeTaskFiles(status)
   }
@@ -849,6 +1283,9 @@ class TorrentEngine {
       this.rpcFailCount = 0
       const waiting = await this.rpc<AriaStatus[]>('tellWaiting', [0, 1000]).catch(() => [])
       const stopped = await this.rpc<AriaStatus[]>('tellStopped', [0, 1000]).catch(() => [])
+      // 队列位置：tellWaiting 的返回顺序就是排队位次（aria2 不直接返回 position 字段）
+      this.queuePositions.clear()
+      waiting.forEach((item, index) => this.queuePositions.set(item.gid, index))
       for (const status of [...active, ...waiting, ...stopped]) {
         // aria2 的 tellStatus 不返回 infoHash：磁力任务的哈希来自 URI，后续任务从父任务的 followedBy 反查
         let hash = status.bittorrent?.infoHash?.toLowerCase() || this.gidHashes.get(status.gid)
@@ -870,31 +1307,66 @@ class TorrentEngine {
         const mapped = this.gidHashes.get(item.gid)
         if (key === item.gid && mapped && mapped !== item.gid) this.statuses.delete(key)
       }
+      // 全局统计（C2）：与状态刷新共用一次轮询周期
+      if (this.globalStatListener) {
+        const stat = await this.getGlobalStat().catch(() => null)
+        if (stat) this.globalStatListener(stat)
+      }
     } finally { this.refreshing = false }
   }
   private applyStatus(hash: string, status: AriaStatus) {
     const prev = this.statuses.get(hash)
     this.statuses.set(hash, status)
     const task = this.taskSources.get(hash)
-    // 完成边沿检测：仅在本地跟踪的任务首次完成时触发，恢复的历史完成任务（prev 为空）不通知
-    if (prev && prev.status !== 'complete' && status.status === 'complete' && task && !task.done) {
+    // 完成边沿检测：做种开启时 aria2 会长期停留在 active，因此用「字节数下满」而不是 status==='complete'
+    if (prev && !this.isFinished(prev) && this.isFinished(status) && task && !task.done) {
       task.done = true
       this.persistTasks()
+      this.retryCounts.delete(hash.toLowerCase())
       this.completeListener?.(hash, status.bittorrent?.info?.name || this.taskNames.get(hash) || status.info || hash)
     }
     const key = this.taskSources.has(hash) ? hash : this.taskSources.has(hash.toLowerCase()) ? hash.toLowerCase() : ''
     const entry = key ? this.taskSources.get(key)! : undefined
-    // 首次到达 complete 时把任务标记为已完整下载，重启恢复时会自动校验复用数据
-    if (status.status === 'complete' && entry && !entry.done) {
+    // 首次到达「下满」时把任务标记为已完整下载，重启恢复时会自动校验复用数据
+    if (this.isFinished(status) && entry && !entry.done) {
       entry.done = true
       this.persistTasks()
       logger.info('tasks', `download complete: ${hash}`)
     }
+    // 失败自动重试（A8）：仅在错误边沿触发一次，退避后按原来源重新入队
+    if (status.status === 'error' && (!prev || prev.status !== 'error')) this.scheduleAutoRetry(hash)
     // 内容没有变化时不触发推送，避免渲染层每秒整体重渲染
     if (prev && JSON.stringify(prev) === JSON.stringify(status)) return
     const listener = this.callbacks.get(hash) || this.callbacks.get(hash.toLowerCase()) || this.globalListener
     if (listener) listener(this.toTorrentStatus(hash, status))
   }
+
+  // 是否已下满（做种中同样算完成）：totalLength 未知（磁力解析中）时不算
+  private isFinished(status: AriaStatus) {
+    return isFinishedBytes(toNumber(status.completedLength), toNumber(status.totalLength))
+  }
+
+  private scheduleAutoRetry(hash: string) {
+    const key = hash.toLowerCase()
+    if (!this.autoRetry || this.maxRetries <= 0) return
+    if (!this.taskSources.has(key) && !this.taskSources.has(hash)) return
+    const attempt = (this.retryCounts.get(key) || 0) + 1
+    const delay = retryDelayMs(attempt, this.maxRetries)
+    if (delay === null) {
+      logger.error('tasks', `${hash} 重试 ${this.maxRetries} 次仍失败，停止自动重试`)
+      return
+    }
+    this.retryCounts.set(key, attempt)
+    if (this.retryTimers.has(key)) return
+    logger.info('tasks', `${hash} 出错，${Math.round(delay / 1000)} 秒后自动重试（第 ${attempt}/${this.maxRetries} 次）`)
+    const timer = setTimeout(() => {
+      this.retryTimers.delete(key)
+      if (this.destroying) return
+      void this.retryTorrent(key).catch((error) => logger.error('tasks', `auto retry failed for ${hash}: ${getErrorMessage(error)}`))
+    }, delay)
+    this.retryTimers.set(key, timer)
+  }
+
   private async refreshGid(gid: string, hash: string, callback?: (status: TorrentStatus) => void): Promise<AriaStatus> { const status = await this.rpc<AriaStatus>('tellStatus', [gid, ['gid', 'status', 'totalLength', 'completedLength', 'downloadSpeed', 'uploadSpeed', 'connections', 'dir', 'bittorrent', 'followedBy', 'belongsTo', 'files']]); this.gidHashes.set(gid, hash); if (callback) this.callbacks.set(hash, callback); this.applyStatus(hash, status); return status }
   private async findStatus(infoHash: string) { const hash = infoHash.toLowerCase(); const existing = this.statuses.get(hash); if (existing) return existing; await this.refreshStatuses(); const found = this.statuses.get(hash); if (!found) throw new Error('下载任务不存在'); return found }
   private toTorrentStatus(hash: string, status: AriaStatus): TorrentStatus {
@@ -907,8 +1379,9 @@ class TorrentEngine {
     const name = status.bittorrent?.info?.name || this.taskNames.get(hash) || this.taskNames.get(hash.toLowerCase()) || status.info || hash
     // 磁力链接只对 BT 任务有意义：直链任务的 key 是 sha1(url)，不是 btih 哈希
     const magnetURI = type === 'bt' ? buildMagnetURI(hash, name, trackerList(this.trackerOverride).split(',')) : ''
-    const state: TorrentStatus['status'] = status.status === 'error' ? 'error' : this.metadataGids.has(status.gid) ? 'parsing' : status.status === 'paused' ? 'paused' : status.status === 'complete' ? 'seeding' : status.status === 'active' ? 'downloading' : 'connecting'
-    return { infoHash: hash, name, magnetURI, progress: totalSize ? downloaded / totalSize : 0, downloadSpeed, uploadSpeed: toNumber(status.uploadSpeed), downloaded, totalSize, numPeers: toNumber(status.connections), timeRemaining: downloadSpeed > 0 ? Math.ceil(((totalSize - downloaded) / downloadSpeed) * 1000) : 0, status: state, uploaded: toNumber(status.uploadLength), saveDir: status.dir || '', type, sourceUrl: type === 'bt' ? undefined : task?.source, error: state === 'error' ? status.errorMessage || '任务出错' : undefined, files }
+    // 做种中（aria2 seeder=true 时状态仍是 active）：展示为「已完成」，否则会一直挂在「进行中」
+    const state = mapAriaState({ status: status.status, seeder: status.seeder, isMetadata: this.metadataGids.has(status.gid) })
+    return { infoHash: hash, name, magnetURI, progress: computeProgress(downloaded, totalSize), downloadSpeed, uploadSpeed: toNumber(status.uploadSpeed), downloaded, totalSize, numPeers: toNumber(status.connections), timeRemaining: computeTimeRemaining(downloaded, totalSize, downloadSpeed), status: state, uploaded: toNumber(status.uploadLength), saveDir: status.dir || '', type, sourceUrl: type === 'bt' ? undefined : task?.source, error: state === 'error' ? status.errorMessage || '任务出错' : undefined, queuePosition: this.queuePositions.get(status.gid), addedAt: task?.addedAt, files }
   }
 
   private handleStream(request: IncomingMessage, response: ServerResponse) {
@@ -919,6 +1392,9 @@ class TorrentEngine {
     // 渲染层用 fetch 探测数据就绪状态（跨源），需要放行 CORS 预检；安全性由 token 保证
     if (request.method === 'OPTIONS') { response.writeHead(204, { 'access-control-allow-origin': '*', 'access-control-allow-methods': 'GET, OPTIONS', 'access-control-allow-headers': 'range' }); response.end(); return }
     const cors = { 'access-control-allow-origin': '*' }
+    // 兼容播放副本：转码输出在下载目录的 .btviewer-compat 下，走同一套 token 与 Range 逻辑
+    const compatMatch = url.pathname.match(/^\/compat\/([^/]+)$/)
+    if (compatMatch) { this.serveCompatFile(request, response, decodeURIComponent(compatMatch[1]), cors); return }
     const match = url.pathname.match(/^\/stream\/([^/]+)\/(\d+)$/)
     if (!match) { response.writeHead(404, cors); response.end(); return }
     // 字幕路由：srt 在内存中转成 vtt 后整体返回（字幕文件都很小，无需 Range）
@@ -945,31 +1421,41 @@ class TorrentEngine {
     const root = resolve(status.dir || this.dataDir)
     const path = resolve(file.path)
     if (!isUnderRoot(root, path)) { response.writeHead(403, cors); response.end(); return }
+    this.serveFileRange(request, response, path, cors)
+  }
+
+  // 兼容播放副本：/compat/:id（id 是本次转码会话，只有生成完成才可读）
+  private serveCompatFile(request: IncomingMessage, response: ServerResponse, id: string, cors: Record<string, string>) {
+    const entry = this.compatFiles.get(id)
+    if (!entry || !entry.complete) { response.writeHead(404, cors); response.end('Transcode not ready'); return }
+    const path = resolve(entry.path)
+    if (!isUnderRoot(resolve(this.effectiveDownloadDir()), path)) { response.writeHead(403, cors); response.end(); return }
+    this.serveFileRange(request, response, path, cors)
+  }
+
+  // Range 读取：/stream 与 /compat 共用（单一范围，bytes=-N 后缀范围；空文件不再走到 createReadStream 崩溃）
+  private serveFileRange(request: IncomingMessage, response: ServerResponse, path: string, cors: Record<string, string>) {
     let fileStat: ReturnType<typeof statSync>
     try { fileStat = statSync(path) } catch { response.writeHead(404, cors); response.end('File not ready'); return }
     const size = fileStat.size
-    let start = 0
-    let end = size - 1
-    const rangeHeader = request.headers.range
-    if (rangeHeader) {
-      const range = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader.trim())
-      // 只处理单一范围；bytes=-N 为后缀范围（最后 N 字节）
-      if (!range || (range[1] === '' && range[2] === '')) { response.writeHead(416, { ...cors, 'content-range': `bytes */${size}` }); response.end(); return }
-      if (range[1] === '') start = Math.max(0, size - Number(range[2]))
-      else {
-        start = Number(range[1])
-        if (range[2] !== '') end = Math.min(Number(range[2]), size - 1)
-      }
-      if (start > end || start >= size) { response.writeHead(416, { ...cors, 'content-range': `bytes */${size}` }); response.end(); return }
-    }
-    response.writeHead(rangeHeader ? 206 : 200, { ...cors, 'content-type': getMime(path), 'content-length': end - start + 1, 'accept-ranges': 'bytes', ...(rangeHeader ? { 'content-range': `bytes ${start}-${end}/${size}` } : {}) })
-    createReadStream(path, { start, end }).pipe(response)
+    const range = parseByteRange(request.headers.range, size)
+    if (range.kind === 'empty') { response.writeHead(200, { ...cors, 'content-type': getMime(path), 'content-length': 0 }); response.end(); return }
+    if (range.kind === 'invalid') { response.writeHead(416, { ...cors, 'content-range': `bytes */${size}` }); response.end(); return }
+    const headers: Record<string, string | number> = { ...cors, 'content-type': getMime(path), 'content-length': range.end - range.start + 1, 'accept-ranges': 'bytes' }
+    if (range.kind === 'partial') headers['content-range'] = `bytes ${range.start}-${range.end}/${size}`
+    response.writeHead(range.kind === 'partial' ? 206 : 200, headers)
+    createReadStream(path, { start: range.start, end: range.end }).pipe(response)
   }
 
   async destroy() {
     this.destroying = true
     if (this.timer) clearInterval(this.timer)
     this.timer = null
+    for (const timer of this.retryTimers.values()) clearTimeout(timer)
+    this.retryTimers.clear()
+    for (const [, child] of this.compatProcs) { try { child.kill() } catch { /* 进程已退出 */ } }
+    this.compatProcs.clear()
+    this.compatFiles.clear()
     for (const [, child] of this.videoProcs) { try { child.kill() } catch { /* 进程已退出 */ } }
     this.videoProcs.clear()
     if (this.process) {

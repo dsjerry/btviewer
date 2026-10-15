@@ -45,6 +45,8 @@ jobs:
           fi
           npm version "$VERSION" --no-git-tag-version --allow-same-version
       - run: npm ci
+      # 打开发包前先跑类型检查 / lint / 单测，避免把坏版本发出去
+      - run: npm run verify
       - run: npm run build
       - name: 打包（产物稍后统一发布到 Release）
         run: npx electron-builder ${{ matrix.args }} --publish never

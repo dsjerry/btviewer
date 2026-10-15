@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { ipc } from '../services/ipc'
+import { t } from '../services/i18n'
 import type { TorrentFileInfo, TorrentStatus } from '../types'
 
 interface HomeProps {
@@ -46,7 +47,7 @@ const Home: React.FC<HomeProps> = ({ parsingTask, onParsingChange, onTorrentAdde
   // 统一任务入口：BT 任务进入解析流程（三选一），直链/视频任务直接入队并跳转下载页
   const parseInput = async (value: string) => {
     const text = value.trim()
-    if (!isTaskInput(text)) { setNotice({ type: 'error', text: '请输入磁力链接、http(s)/ftp 下载链接或 .torrent/.metalink 文件路径' }); return }
+    if (!isTaskInput(text)) { setNotice({ type: 'error', text: t('home.batchFailedHint') }); return }
     setLoading(true); setNotice(null)
     try {
       const result = await ipc.addTask(text)
@@ -60,7 +61,31 @@ const Home: React.FC<HomeProps> = ({ parsingTask, onParsingChange, onTorrentAdde
     } catch (error) { setNotice({ type: 'error', text: error instanceof Error ? error.message : '添加任务失败' }) } finally { setLoading(false) }
   }
 
-  const addTask = () => void parseInput(magnetUri)
+  // 批量入口：一次粘贴多个链接（每行一个）时不再逐个进解析流程。
+  // BT 任务只登记到媒体库（不自动开始下载，等用户选文件），直链/视频任务直接开始下载。
+  const addBatch = async (links: string[]) => {
+    setLoading(true); setNotice(null)
+    try {
+      const result = await ipc.addTasksBatch(links)
+      if (!result.success || !result.data) { setNotice({ type: 'error', text: result.error || '批量添加失败' }); return }
+      const { added, bt, failed, errors } = result.data
+      const direct = added - bt
+      setMagnetUri('')
+      const parts = [t('home.batchAdded', { added })]
+      if (bt) parts.push(t('home.batchBt', { count: bt }))
+      if (direct) parts.push(t('home.batchDirect', { count: direct }))
+      if (failed) parts.push(t('home.batchFailed', { count: failed }))
+      setNotice({ type: failed ? 'error' : 'success', text: `${parts.join('，')}${errors.length ? `：${errors[0]}` : ''}` })
+      if (direct) onQuickDownload()
+      else onTorrentAdded()
+    } catch (error) { setNotice({ type: 'error', text: error instanceof Error ? error.message : '批量添加失败' }) } finally { setLoading(false) }
+  }
+
+  const addTask = () => {
+    const links = magnetUri.split(/\s+/).map((item) => item.trim()).filter(isTaskInput)
+    if (links.length > 1) { void addBatch(links); return }
+    void parseInput(magnetUri)
+  }
 
   const parseTaskFile = async (path: string) => {
     setLoading(true); setNotice(null)
@@ -77,10 +102,10 @@ const Home: React.FC<HomeProps> = ({ parsingTask, onParsingChange, onTorrentAdde
   const pasteInput = async () => {
     try {
       const text = (await navigator.clipboard.readText()).trim()
-      if (!isTaskInput(text)) { setNotice({ type: 'error', text: '剪贴板中没有可识别的链接' }); return }
+      if (!isTaskInput(text)) { setNotice({ type: 'error', text: t('home.clipboardEmpty') }); return }
       setMagnetUri(text)
       await parseInput(text)
-    } catch (error) { setNotice({ type: 'error', text: error instanceof Error ? error.message : '读取剪贴板失败' }) }
+    } catch (error) { setNotice({ type: 'error', text: error instanceof Error ? error.message : t('home.clipboardFailed') }) }
   }
 
   const openFile = async () => {
@@ -102,17 +127,17 @@ const Home: React.FC<HomeProps> = ({ parsingTask, onParsingChange, onTorrentAdde
     setSelectedFiles(new Set())
   }
 
-  // 拖放解析：优先取 .torrent/.metalink 文件，其次取文本中的磁力或直链
+  // 拖放解析：优先批量处理所有 .torrent/.metalink 文件与文本中的全部链接
   const dropFiles = async (event: React.DragEvent) => {
     const transfer = event.dataTransfer
-    const taskFile = Array.from(transfer.files).find((item) => /\.(torrent|metalink|meta4)$/i.test(item.name))
-    if (taskFile) { await parseTaskFile(ipc.getPathForFile(taskFile)); return }
+    const taskFiles = Array.from(transfer.files).filter((item) => /\.(torrent|metalink|meta4)$/i.test(item.name)).map((item) => ipc.getPathForFile(item))
     const text = transfer.getData('text/uri-list') || transfer.getData('text/plain')
-    const magnet = text.split(/\s+/).find((item) => item.startsWith('magnet:?'))
-    if (magnet) { setMagnetUri(magnet); await parseInput(magnet); return }
-    const url = text.split(/\s+/).find((item) => /^(https?:\/\/|ftp:\/\/)/i.test(item))
-    if (url) { setMagnetUri(url); await parseInput(url); return }
-    setNotice({ type: 'error', text: '请拖入 .torrent/.metalink 文件或下载链接' })
+    const links = text.split(/\s+/).map((item) => item.trim()).filter(isTaskInput)
+    const all = [...taskFiles, ...links]
+    if (!all.length) { setNotice({ type: 'error', text: t('home.dropFilesOnly') }); return }
+    // 单个 BT 文件仍走解析流程（可以选择要下载的文件）；其余情况批量入队
+    if (all.length === 1 && taskFiles.length === 1) { await parseTaskFile(all[0]); return }
+    await addBatch(all)
   }
 
   // 用计数器处理嵌套元素的 dragenter/dragleave，避免子元素误触发遮罩闪烁
@@ -128,24 +153,24 @@ const Home: React.FC<HomeProps> = ({ parsingTask, onParsingChange, onTorrentAdde
     const finishParsing = (action: () => void) => { onParsingChange(null); selectionRef.current = { hash: '', initialized: false }; action() }
     return (
       <div className="home-page" {...dragHandlers}>
-        {dragging && <div className="drop-overlay"><strong>松开以添加任务</strong><small>支持 .torrent/.metalink 文件与磁力、直链</small></div>}
+        {dragging && <div className="drop-overlay"><strong>{t('home.dropTitle')}</strong><small>{t('home.dropHint')}</small></div>}
         <div className="result-panel">
-          <button className="back-link" onClick={resetParse}>← 重新解析</button>
+          <button className="back-link" onClick={resetParse}>{t('home.reselect')}</button>
           <div className="result-heading">
             <span className="panel-icon">✓</span>
             <div>
-              <span className="eyebrow">解析成功</span>
+              <span className="eyebrow">{t('home.parsed')}</span>
               <h2>{parsingTask.name}</h2>
-              <p>{parsingTask.files.length ? `已解析出 ${parsingTask.files.length} 个文件 · 共 ${size(parsingTask.totalSize)}` : '正在等待节点返回文件信息…'}</p>
+              <p>{parsingTask.files.length ? t('home.parsedDesc', { files: parsingTask.files.length, size: size(parsingTask.totalSize) }) : t('home.waitingMeta')}</p>
             </div>
           </div>
           {parsingTask.files.length ? (
             <>
               <div className="result-file-tools">
-                <span>已选 {selectedFiles.size} / {parsingTask.files.length}</span>
-                <button onClick={() => setSelectedFiles(new Set(parsingTask.files.map((file) => file.path)))}>全选</button>
-                <button onClick={() => setSelectedFiles(new Set())}>清空</button>
-                <small>仅勾选的文件会被下载</small>
+                <span>{t('home.selected', { selected: selectedFiles.size, total: parsingTask.files.length })}</span>
+                <button onClick={() => setSelectedFiles(new Set(parsingTask.files.map((file) => file.path)))}>{t('home.selectAll')}</button>
+                <button onClick={() => setSelectedFiles(new Set())}>{t('home.clear')}</button>
+                <small>{t('home.onlySelected')}</small>
               </div>
               <div className="result-file-list">
                 {parsingTask.files.map((file) => (
@@ -158,25 +183,25 @@ const Home: React.FC<HomeProps> = ({ parsingTask, onParsingChange, onTorrentAdde
                 ))}
               </div>
               <div className="result-actions">
-                <button className="save-action" onClick={() => finishParsing(() => onTorrentAdded(parsingTask))}>保存到媒体库 <span>＋</span></button>
-                {playable.length > 0 && <button className="play-action" onClick={() => finishParsing(() => onPlayFile(parsingTask, playable[0]))}>播放{playable.length > 1 ? '第一个媒体' : ''} <span>▶</span></button>}
+                <button className="save-action" onClick={() => finishParsing(() => onTorrentAdded(parsingTask))}>{t('home.saveToLibrary')} <span>＋</span></button>
+                {playable.length > 0 && <button className="play-action" onClick={() => finishParsing(() => onPlayFile(parsingTask, playable[0]))}>{t('home.playFirst', { which: playable.length > 1 ? t('home.playFirstMedia') : '' })} <span>▶</span></button>}
                 {playable.length === 0 && <span />}
-                <button className="download-action" disabled={!selectedFiles.size} onClick={() => finishParsing(() => onDownload(parsingTask, [...selectedFiles]))}>{selectedFiles.size === parsingTask.files.length ? '下载全部资源' : `下载选中文件（${selectedFiles.size}）`} <span>↓</span></button>
+                <button className="download-action" disabled={!selectedFiles.size} onClick={() => finishParsing(() => onDownload(parsingTask, [...selectedFiles]))}>{selectedFiles.size === parsingTask.files.length ? t('home.downloadAll') : t('home.downloadSelected', { count: selectedFiles.size })} <span>↓</span></button>
               </div>
             </>
           ) : parsingTask.status === 'error' ? (
             <div className="waiting-result">
-              <span>解析失败：{parsingTask.error || '未能在网络中找到该资源'}</span>
-              <small>资源可能已无活跃节点，可点上方“← 重新解析”尝试其它链接</small>
+              <span>{t('home.parseError', { error: parsingTask.error || t('home.parseFailed') })}</span>
+              <small>{t('home.parseErrorHint')}</small>
             </div>
           ) : (
             <div className="waiting-result">
               <div className="loading-spinner" />
-              <span>已解析链接，正在获取资源文件信息…</span>
-              <small>获取到文件列表后会自动展示；在下方选择操作前不会开始下载</small>
+              <span>{t('home.waitingMeta')}</span>
+              <small>{t('home.waitingMetaHint')}</small>
             </div>
           )}
-          <p className="privacy-note"><span>◉</span> 当前任务已解析，选择操作后才会开始对应行为</p>
+          <p className="privacy-note"><span>◉</span> {t('home.pendingNote')}</p>
         </div>
       </div>
     )
@@ -184,19 +209,19 @@ const Home: React.FC<HomeProps> = ({ parsingTask, onParsingChange, onTorrentAdde
 
   return (
     <div className="home-page" {...dragHandlers}>
-      {dragging && <div className="drop-overlay"><strong>松开以添加任务</strong><small>支持 .torrent/.metalink 文件与磁力、直链</small></div>}
+      {dragging && <div className="drop-overlay"><strong>松开以添加任务</strong><small>支持 .torrent/.metalink 文件与磁力、直链，可一次拖入多个</small></div>}
       <div className="add-panel">
-        <div className="panel-kicker"><span className="panel-icon">+</span><div><strong>添加下载任务</strong><small>磁力/种子解析后选择操作，直链直接下载</small></div></div>
-        <label htmlFor="magnet">下载链接</label>
-        <textarea id="magnet" value={magnetUri} onChange={(event) => setMagnetUri(event.target.value)} placeholder="magnet:?xt=urn:btih:... 或 https://… / ftp://… 下载链接" rows={4} disabled={loading} />
-        <button className="primary-action" onClick={addTask} disabled={loading}>{loading ? <span className="button-loader" /> : '添加任务'}<span>→</span></button>
-        <div className="or-divider"><span>或者</span></div>
+        <div className="panel-kicker"><span className="panel-icon">+</span><div><strong>{t('home.title')}</strong><small>{t('home.subtitle')}</small></div></div>
+        <label htmlFor="magnet">{t('home.inputLabel')}</label>
+        <textarea id="magnet" value={magnetUri} onChange={(event) => setMagnetUri(event.target.value)} placeholder={t('home.placeholder')} rows={4} disabled={loading} />
+        <button className="primary-action" onClick={addTask} disabled={loading}>{loading ? <span className="button-loader" /> : t('home.add')}<span>→</span></button>
+        <div className="or-divider"><span>{t('home.or')}</span></div>
         <div className="alt-actions">
-          <button className="secondary-action" onClick={() => void pasteInput()} disabled={loading}><span>⎘</span><span className="action-label">从剪贴板添加链接</span></button>
-          <button className="secondary-action" onClick={() => void openFile()} disabled={loading} title="支持 .torrent / .metalink 文件"><span>⌁</span><span className="action-label">选择 .torrent / .metalink 文件</span></button>
+          <button className="secondary-action" onClick={() => void pasteInput()} disabled={loading}><span>⎘</span><span className="action-label">{t('home.fromClipboard')}</span></button>
+          <button className="secondary-action" onClick={() => void openFile()} disabled={loading} title={t('home.pickFile')}><span>⌁</span><span className="action-label">{t('home.pickFile')}</span></button>
         </div>
         {notice && <div className={`inline-notice ${notice.type}`}>{notice.type === 'error' ? '!' : '✓'} {notice.text}</div>}
-        <div className="privacy-note"><span>◉</span> 解析只在本机进行，不会上传你的文件</div>
+        <div className="privacy-note"><span>◉</span> {t('home.privacy')}</div>
       </div>
     </div>
   )

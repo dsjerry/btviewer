@@ -22,3 +22,7 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+      # 端到端冒烟（D1）：启动真实应用 + 本地文件服务，验证「添加任务 → 真实下载 → 界面显示已完成」
+      # 只在 Windows 上跑：Linux 起 Electron 需要 xvfb
+      - if: runner.os == 'Windows'
+        run: npm run smoke

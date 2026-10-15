@@ -2,6 +2,7 @@ import { ipc } from './ipc'
 
 // 渲染层视频截帧：隐藏 <video> 加载流（支持 Range），seek 后 canvas 截图输出 dataURL
 // 失败结果仅在本次会话内负缓存（文件后续下载完成可能就能截出来了），成功结果持久化到主进程
+// 顺序：内嵌封面（主进程 ffmpeg 提取）→ 视频截帧 → 图标占位
 const WIDTH = 320
 const TIMEOUT_MS = 15000
 
@@ -60,9 +61,16 @@ async function pump() {
     while (queue.length) {
       const job = queue.shift()!
       let result: string | null = null
+      // 内嵌封面优先（B7）：mkv 附件 / mp4 covr / flac picture 比截帧准，且不必等分片下载
       try {
-        result = await capture(await ipc.getStreamUrl(job.infoHash, job.filePath))
-      } catch { /* 任务可能已被移除，按失败处理 */ }
+        const cover = await ipc.getEmbeddedCover(job.infoHash, job.filePath)
+        if (cover.success && cover.data) result = cover.data
+      } catch { /* 没有封面或 ffmpeg 不可用 → 回退截帧 */ }
+      if (!result) {
+        try {
+          result = await capture(await ipc.getStreamUrl(job.infoHash, job.filePath))
+        } catch { /* 任务可能已被移除，按失败处理 */ }
+      }
       memory.set(job.key, result)
       if (result) void ipc.saveThumbnail(job.key, result).catch(() => undefined)
       for (const callback of job.callbacks) callback(result)
