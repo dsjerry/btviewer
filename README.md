@@ -229,6 +229,10 @@ npm run package:linux   # Linux AppImage + deb
 
 Chromium/Video.js 对视频编码和容器格式有支持边界。建议优先使用 MP4/H.264 或浏览器兼容的音频格式。
 
+## 更新日志
+
+各版本变更见 [CHANGELOG.md](CHANGELOG.md)；1.1.0 之前的版本未在该文件维护，可查看 [GitHub Releases](https://github.com/dsjerry/btviewer/releases)。
+
 ## 免责声明
 
 本应用仅提供 BitTorrent、HTTP(S)/FTP 直链与 Metalink 协议的下载与播放功能，不内置、不推荐、不分发任何受版权保护的资源。使用者需自行确保下载与分享的内容合法，并承担相应的法律责任。
