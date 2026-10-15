@@ -17,6 +17,14 @@ const check = (label, ok, detail = '') => {
   results.push(`${ok ? 'PASS' : 'FAIL'}  ${label}${detail ? ` — ${detail}` : ''}`)
   return ok
 }
+// 所有退出路径都必须经过这里：早期返回若直接 return，会连结果都不打印、以 0 退出（冒烟静默“通过”）
+const finish = async () => {
+  console.log(results.join('\n'))
+  const failed = results.filter((line) => line.startsWith('FAIL')).length
+  console.log(`\n冒烟结果：${results.length - failed}/${results.length} 通过${failed ? `（${failed} 项失败）` : ''}`)
+  await sleep(150)
+  process.exit(failed ? 1 : 0)
+}
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 function electronBinary() {
@@ -87,7 +95,13 @@ async function connect(wsUrl) {
 async function main() {
   const mainBundle = join(ROOT, 'release', 'app', 'main', 'main.js')
   const rendererIndex = join(ROOT, 'release', 'app', 'renderer', 'index.html')
-  if (!check('构建产物存在（先跑 npm run build）', existsSync(mainBundle) && existsSync(rendererIndex), rendererIndex)) return
+  if (!check('构建产物存在（先跑 npm run build）', existsSync(mainBundle) && existsSync(rendererIndex), rendererIndex)) return finish()
+  // CDP 走 WebSocket：内置 WebSocket 需要 Node ≥22（20 上要先加 --experimental-websocket）。
+  // 这里显式检查并给出可执行的提示，避免只丢一个 ReferenceError
+  if (!check('Node 版本支持内置 WebSocket（需 Node ≥22）', typeof WebSocket === 'function', `当前 ${process.version}`)) {
+    check('提示', false, '请用 Node 22+ 运行，或在 Node 20 上加 --experimental-websocket 参数')
+    return finish()
+  }
 
   const { server, port: filePort } = await startFileServer()
   const profile = mkdtempSync(join(tmpdir(), 'btviewer-smoke-'))
@@ -183,12 +197,15 @@ async function main() {
       } catch { /* 查询失败不影响结论 */ }
     }
     server.close()
-    // 先出结论再清理：清理失败（Windows 上进程刚退出时目录可能仍被占用）不能吞掉测试结果
-    console.log(results.join('\n'))
-    const failed = results.filter((line) => line.startsWith('FAIL')).length
-    console.log(`\n冒烟结果：${results.length - failed}/${results.length} 通过${failed ? `（${failed} 项失败）` : ''}`)
-    try { rmSync(profile, { recursive: true, force: true }) } catch { console.log(`（临时目录未能删除，可手动清理：${profile}）`) }
-    process.exit(failed ? 1 : 0)
+    // 清理产物（Windows/CI 上进程刚退出时目录可能还被占用一会儿，重试几次再放弃）
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try { rmSync(profile, { recursive: true, force: true }); break } catch {
+        if (attempt === 3) console.log(`（临时目录未能删除，可手动清理：${profile}）`)
+        else await sleep(1000)
+      }
+    }
+    // 先出结论再退出：清理失败不能吞掉测试结果
+    await finish()
   }
 }
 

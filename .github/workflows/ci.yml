@@ -22,7 +22,17 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
-      # 端到端冒烟（D1）：启动真实应用 + 本地文件服务，验证「添加任务 → 真实下载 → 界面显示已完成」
-      # 只在 Windows 上跑：Linux 起 Electron 需要 xvfb
-      - if: runner.os == 'Windows'
-        run: npm run smoke
+
+  # 端到端冒烟（D1）：启动真实应用 + 本地文件服务，走 CDP 验证「添加任务 → 真实下载 → 界面显示已完成」
+  smoke:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # 冒烟脚本用内置 WebSocket 连 CDP，该全局对象从 Node 22 起才默认可用（Node 20 需 --experimental-websocket）
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run smoke
