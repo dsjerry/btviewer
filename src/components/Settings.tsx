@@ -550,7 +550,7 @@ const Settings: React.FC<{ theme: ThemeMode; onThemeChange: (mode: ThemeMode) =>
               <div className="about-title">BTViewer <small>v{pkg.version}</small></div>
               <p>{pkg.description}</p>
               <div className="about-meta">
-                <span>{t('settings.author')} <a onClick={() => void openExternal(REPO_URL)} role="button" tabIndex={0}>{pkg.author}</a></span>
+                <span>{t('settings.author')} <a onClick={() => void openExternal(REPO_URL)} role="button" tabIndex={0}>{pkg.author.name}</a></span>
                 <span>{t('settings.license')} <a onClick={() => void openExternal('https://opensource.org/license/mit')} role="button" tabIndex={0}>{pkg.license}</a></span>
                 <span>{t('settings.repo')} <a onClick={() => void openExternal(pkg.repository.url.replace('git+', '').replace('.git', ''))} role="button" tabIndex={0}>GitHub</a></span>
                 <span>{t('settings.feedback')} <a onClick={() => void openExternal(pkg.bugs.url)} role="button" tabIndex={0}>Issues</a></span>

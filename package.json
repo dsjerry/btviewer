@@ -3,7 +3,10 @@
   "version": "1.1.0",
   "description": "BT在线播放桌面应用 - 支持磁力链接和torrent文件在线播放",
   "main": "release/app/main/main.js",
-  "author": "dsjerry",
+  "author": {
+    "name": "dsjerry",
+    "email": "dsjerry@qq.com"
+  },
   "license": "MIT",
   "scripts": {
     "dev": "node scripts/dev.mjs",

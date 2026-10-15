@@ -59,6 +59,7 @@ jobs:
             release/*.exe
             release/*.exe.blockmap
             release/*.AppImage
+            release/*.deb
             release/*.zip
             release/*.dmg
             release/latest*.yml
