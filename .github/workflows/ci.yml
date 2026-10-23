@@ -8,8 +8,10 @@ on:
 jobs:
   verify:
     strategy:
+      # mac 也要跑：平台分支（二进制解析、登录项、菜单）只有对应 runner 才覆盖得到
+      fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest]
+        os: [windows-latest, ubuntu-latest, macos-14]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -22,6 +24,16 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+      # 内置原生产物是二进制：确认检出后仍可执行（防止权限位丢失或误加 LFS/换行转换）
+      - name: 校验内置二进制（macOS）
+        if: startsWith(matrix.os, 'macos')
+        shell: bash
+        run: |
+          for bin in resources/aria2/mac-arm64/aria2c resources/media/mac-arm64/ffmpeg resources/media/mac-arm64/ffprobe; do
+            test -x "$bin" || { echo "::error::$bin 不可执行"; exit 1; }
+            lipo -archs "$bin" | grep -q arm64 || { echo "::error::$bin 架构不符"; exit 1; }
+            "$(dirname "$bin")/$(basename "$bin")" $([ "$(basename "$bin")" = aria2c ] && echo --version || echo -hide_banner -version) | head -1
+          done
 
   # 端到端冒烟（D1）：启动真实应用 + 本地文件服务，走 CDP 验证「添加任务 → 真实下载 → 界面显示已完成」
   smoke:
