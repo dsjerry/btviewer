@@ -49,8 +49,8 @@ aria2 负责资源发现和下载（BT 与直链共用一个下载队列），yt
 - npm
 - Electron 支持的平台
 - aria2c：
-  - Windows（x64）与 Linux（amd64）开发环境可使用项目内 `resources/aria2` 的二进制
-  - macOS 及其它平台需自备对应平台的 aria2c 文件
+  - Windows（x64）与 Linux（amd64）开发环境可直接使用项目内 `resources/aria2/win-x64`、`resources/aria2/linux-x64` 的二进制
+  - macOS Apple 芯片可直接使用内置的 `resources/aria2/mac-arm64`；Intel 需自备 `resources/aria2/mac-x64/aria2c`
 
 也可以通过环境变量指定 aria2c 路径：
 
@@ -187,17 +187,32 @@ resources/
   icon.ico/.icns/.png  打包用图标（由 generate-icons.mjs 生成）
 ```
 
+> 外挂依赖（yt-dlp / ffmpeg / deno）都可以在「设置 → 视频站点解析」里一键安装：
+> Windows、macOS 全部由应用自动下载官方构建到用户目录（`~/Library/Application Support/BTViewer/bin`
+> 或 `%APPDATA%\BTViewer\bin`），**不需要终端、pip 或 brew**。Linux 上 yt-dlp 与 deno 同样可一键安装，
+> ffmpeg 仍建议由发行版包管理器提供（各发行版构建的编解码器差异大）。
+
 ## 打包说明
 
-`electron-builder.yml` 已配置将 `resources/aria2` 复制到应用资源目录。跨平台发布时，需要分别提供：
+aria2 二进制按「平台-架构」分目录存放，`electron-builder.yml` 只把当前构建目标的 `${os}-${arch}` 复制进应用：
 
 ```text
-Linux:  resources/aria2/aria2c
-Windows: resources/aria2/aria2c.exe
-macOS:  resources/aria2/aria2c
+Windows:    resources/aria2/win-x64/aria2c.exe      （或 win-arm64）
+macOS:      resources/aria2/mac-arm64/aria2c        （内置；Intel 需补 mac-x64）
+Linux:      resources/aria2/linux-x64/aria2c        （或 linux-arm64）
 ```
 
-Linux aria2 使用的动态库也需要随应用提供，或确保目标系统已经安装对应运行库。
+`npm run package:mac` 默认出 universal 包，会同时打包 `mac-x64` 与 `mac-arm64` 两份，两个目录都要有可执行文件。
+
+Linux aria2 使用的动态库（`libaria2.so.0` 等）放在同一目录，或确保目标系统已经安装对应运行库。
+
+> 内置媒体工具放在 `resources/media/<os>-<arch>/`，启动时自动复制到用户数据目录，用户无需任何操作；
+> 当前提供 `mac-arm64`（ffmpeg/ffprobe 7.1.1，libx264 + VideoToolbox，仅依赖系统库，ad-hoc 签名），
+> 由 ffmpeg 7.1.1 源码在本机编译（`--enable-libx264 --enable-videotoolbox`）；SHA-256 `55af1920…6fbaf2`（ffmpeg）、`7ebd8d9e…2b975e`（ffprobe）。
+
+内置的 `mac-arm64/aria2c` 由官方 aria2 1.37.0 源码在本机 Apple 芯片上编译（静态链接 c-ares，AppleTLS，BitTorrent 支持），
+只依赖系统自带库（libz / libSystem / Security / CoreFoundation / libc++），已做 ad-hoc 签名；SHA-256 `fd02dd6b…439af3`。
+`mac-x64` 仍需自行补一份 Intel 二进制（官方 1.35.0 的 `aria2-1.35.0-osx-darwin` 即 x86_64，可直接使用）。
 
 本地打包：
 

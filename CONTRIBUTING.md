@@ -21,7 +21,7 @@ npm run dev        # 启动开发环境
 npm run typecheck  # 提交前运行类型检查
 ```
 
-要求 Node.js 20+。Windows / Linux 会使用项目内 `resources/aria2` 的 aria2c；其它平台请通过 `ARIA2C_PATH` 指定。
+要求 Node.js 20+。Windows / Linux 会使用项目内 `resources/aria2/win-x64`、`resources/aria2/linux-x64` 的 aria2c；macOS 需自备 `resources/aria2/mac-arm64`（或 `mac-x64`），也可通过 `ARIA2C_PATH` 指定任意路径。
 
 > 提示：如果你的 npm 配置了本地代理但代理未启动，`npm install` 会失败，可临时追加 `--proxy=null --https-proxy=null`。
 

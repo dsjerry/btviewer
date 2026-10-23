@@ -75,6 +75,14 @@ const App: React.FC = () => {
   // 剪贴板检测到链接（C4）：只提示，用户确认后才添加
   const [clipboardInput, setClipboardInput] = useState<string | null>(null)
   useEffect(() => { try { return ipc.onClipboardInput((input) => setClipboardInput(input)) } catch { return () => undefined } }, [])
+  // 原生菜单跳转（macOS 菜单栏「设置…」/「显示主窗口」）：只认已知视图，其余忽略
+  useEffect(() => {
+    try {
+      return ipc.onNavigate((view) => {
+        if (navItems.some((item) => item.key === view)) setViewMode(view as ViewMode)
+      })
+    } catch { return () => undefined }
+  }, [])
   // 全局限速：只提交这一个字段，主进程会热应用到 aria2（空值 = 不限速）
   const applySpeedLimit = async (value: string) => {
     setLimitOpen(false)

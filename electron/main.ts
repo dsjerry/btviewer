@@ -1,20 +1,20 @@
 import { app, BrowserWindow, ipcMain, dialog, Menu, shell, nativeTheme, Tray, Notification, clipboard } from 'electron'
 import { join, resolve } from 'path'
 import { spawn } from 'child_process'
-import { createWriteStream, readFileSync, rmSync, writeFileSync } from 'fs'
+import { createWriteStream, existsSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { randomUUID } from 'crypto'
 import { torrentEngine } from './torrent-engine'
 import { getProgress, setProgress } from './progress-store'
 import { getThumbnails, saveThumbnail } from './thumbnail-store'
 import { loadSettings, saveSettings } from './settings'
 import { addFeed, checkAllFeeds, checkFeed, downloadFeedItem, getFeeds, removeFeed, startPolling, updateFeed } from './rss'
-import { isUnderRoot } from './torrent-engine'
+import { isUnderRoot, resolveAria2Binary } from './torrent-engine'
 import { collectLaunchInputs } from './launch-inputs'
 import { planPostAction } from './post-action'
 import { createClipboardWatcher } from './clipboard-watch'
 import { formatSpeed } from '../src/services/task-meta'
 import { detectBinary, detectJsRuntime, clearDetectCache } from './ytdlp-engine'
-import { downloadYtDlp, downloadFfmpeg, downloadDeno, updateYtDlp } from './ytdlp-installer'
+import { downloadYtDlp, downloadFfmpeg, downloadDeno, updateYtDlp, seedBundledMedia, installDir, installCapabilities } from './ytdlp-installer'
 import { logger, listLogFiles, readLogTail } from './logger'
 import { buildDiagnostics } from './diagnostics'
 import { isNewerVersion, parseLatestRelease } from './update-check'
@@ -44,8 +44,14 @@ function applyNativeTheme(theme?: string) {
   nativeTheme.themeSource = theme === 'light' || theme === 'dark' ? theme : 'system'
 }
 
-// 开机自启写系统登录项；--hidden 配合托盘静默启动
+// 开机自启写系统登录项；--hidden 配合托盘静默启动。
+// macOS 走登录项（10.13+ 的 SMAppService 需要已签名且位于 /Applications），用 openAsHidden 而不是
+// path/args 传参——mac 上给登录项塞自定义 argv 不生效；Windows 仍用 arguments 附带 --hidden。
 function applyLoginItem(enabled: boolean) {
+  if (process.platform === 'darwin') {
+    app.setLoginItemSettings({ openAtLogin: enabled, openAsHidden: enabled })
+    return
+  }
   app.setLoginItemSettings({ openAtLogin: enabled, path: process.execPath, args: ['--hidden'] })
 }
 
@@ -128,7 +134,12 @@ async function collectDiagnostics(): Promise<string> {
     },
     network: await torrentEngine.networkStatus().catch(() => null),
     tasks: { total: statuses.length, downloading: count('downloading'), connecting: count('connecting'), parsing: count('parsing'), seeding: count('seeding'), paused: count('paused'), error: count('error') },
-    binaries: { ffmpeg, ytdlp, jsRuntime: jsRuntime ? `${jsRuntime.name} ${jsRuntime.version || ''}`.trim() : null },
+    binaries: {
+      ffmpeg,
+      ytdlp,
+      jsRuntime: jsRuntime ? `${jsRuntime.name} ${jsRuntime.version || ''}`.trim() : null,
+      aria2: process.env.ARIA2C_PATH || resolveAria2Binary(app.isPackaged ? join(process.resourcesPath, 'aria2') : join(app.getAppPath(), 'resources', 'aria2'))
+    },
     recentErrors: errors
   })
 }
@@ -185,19 +196,62 @@ function closeRecordHandle(id: string, remove: boolean) {
 }
 
 function trayIconPath() {
-  const name = 'icon.png'
+  // macOS 菜单栏优先用模板图（Template 后缀 + 透明底），系统会自动反色；
+  // 没有模板图时 Electron 仍把普通 png 压到 16pt，但在深色菜单栏上会发糊。
+  const name = process.platform === 'darwin' && existsSync(resourcePath('trayTemplate.png')) ? 'trayTemplate.png' : 'icon.png'
+  return resourcePath(name)
+}
+
+function resourcePath(name: string) {
   return app.isPackaged ? join(process.resourcesPath, name) : join(app.getAppPath(), 'resources', name)
 }
 
 function showMainWindow() {
+  if (process.platform === 'darwin') void app.dock?.show()
   if (!mainWindow || mainWindow.isDestroyed()) { void createWindow(); return }
   if (mainWindow.isMinimized()) mainWindow.restore()
   mainWindow.show()
   mainWindow.focus()
 }
 
+// mac 菜单栏是常驻的：清空会让 ⌘C/⌘V/⌘W 全失效，所以保留最小可用的应用/编辑/窗口菜单；
+// Windows/Linux 用自定义标题栏，不需要原生菜单（autoHideMenuBar 已隐藏）。
+function setupAppMenu() {
+  if (process.platform !== 'darwin') { Menu.setApplicationMenu(null); return }
+  Menu.setApplicationMenu(Menu.buildFromTemplate([
+    { label: app.name, submenu: [
+      { role: 'about', label: `关于 ${app.name}` },
+      { type: 'separator' },
+      { label: '设置…', accelerator: 'Cmd+,', click: () => focusView('settings') },
+      { type: 'separator' },
+      { role: 'hide', label: `隐藏 ${app.name}` },
+      { role: 'hideOthers', label: '隐藏其他' },
+      { role: 'unhide', label: '全部显示' },
+      { type: 'separator' },
+      { label: `退出 ${app.name}`, accelerator: 'Cmd+Q', click: () => quitApp() }
+    ] },
+    { label: '编辑', submenu: [
+      { role: 'undo', label: '撤销' }, { role: 'redo', label: '重做' }, { type: 'separator' },
+      { role: 'cut', label: '剪切' }, { role: 'copy', label: '拷贝' }, { role: 'paste', label: '粘贴' },
+      { role: 'selectAll', label: '全选' }
+    ] },
+    { label: '窗口', submenu: [
+      { role: 'minimize', label: '最小化' }, { role: 'zoom', label: '缩放' }, { type: 'separator' },
+      { label: '显示主窗口', accelerator: 'Cmd+0', click: showMainWindow }
+    ] }
+  ]))
+}
+
+// 菜单里跳转到某个视图：复用渲染层既有的导航事件
+function focusView(view: string) {
+  showMainWindow()
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('app:navigate', view)
+}
+
 function createTray() {
   if (tray) return
+  // mac 有菜单栏与 Dock 两个入口，托盘属于可选装饰：先不建，避免菜单栏出现一个发糊的第二图标
+  if (process.platform === 'darwin') return
   tray = new Tray(trayIconPath())
   tray.setToolTip('BTViewer')
   const menu = Menu.buildFromTemplate([
@@ -238,7 +292,7 @@ function forwardGlobalStat(stat: GlobalStat) {
   mainWindow.webContents.send('torrent:global-stat-update', stat)
 }
 
-// 真正退出：置标志后走 close → window-all-closed → shutdown 的既有清理链路
+// 真正退出：置标志后 app.quit()，由 before-quit → shutdown 完成清理
 function quitApp() {
   isQuitting = true
   app.quit()
@@ -270,9 +324,11 @@ async function createWindow() {
     show: !process.argv.includes('--hidden')
   })
 
-  // 关闭按钮默认隐藏到托盘（设置可关闭）；真正退出时放行走清理链路
+  // 关闭按钮默认隐藏到托盘（设置可关闭）；真正退出时放行走清理链路。
+  // macOS 仍关闭而不是隐藏：红绿灯的「关闭」语义就是关窗，应用留在 Dock，点 Dock 图标由 activate 重建窗口。
   mainWindow.on('close', (event) => {
-    if (!isQuitting && loadSettings().closeToTray !== false) {
+    if (isQuitting || process.platform === 'darwin') return
+    if (loadSettings().closeToTray !== false) {
       event.preventDefault()
       mainWindow?.hide()
     }
@@ -553,7 +609,7 @@ function setupIPC() {
       const binary = await detectBinary(customPath || undefined, 'yt-dlp', join(app.getPath('userData'), 'bin'))
       const ffmpeg = binary ? await detectBinary(undefined, 'ffmpeg', join(app.getPath('userData'), 'bin')) : null
       const jsRuntime = binary ? await detectJsRuntime(join(app.getPath('userData'), 'bin')) : null
-      return { success: true, data: { available: !!binary, path: binary || '', ffmpegAvailable: !!ffmpeg, jsRuntime } }
+      return { success: true, data: { available: !!binary, path: binary || '', ffmpegAvailable: !!ffmpeg, jsRuntime, capabilities: installCapabilities() } }
     } catch (error) {
       return { success: false, error: getErrorMessage(error) }
     }
@@ -562,7 +618,7 @@ function setupIPC() {
   // yt-dlp 自动安装：从官方 Release 下载到 userData/bin，进度实时推送渲染层
   ipcMain.handle('ytdlp:install', async () => {
     try {
-      const path = await downloadYtDlp(join(app.getPath('userData'), 'bin'), (received, total) => {
+      const path = await downloadYtDlp(installDir(), (received, total) => {
         if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('ytdlp:install-progress', { received, total })
       })
       clearDetectCache()
@@ -580,7 +636,7 @@ function setupIPC() {
   // ffmpeg 自动安装：gyan.dev 官方构建解压到 userData/bin，进度实时推送；装完自动重试出错的视频任务
   ipcMain.handle('ffmpeg:install', async () => {
     try {
-      const path = await downloadFfmpeg(join(app.getPath('userData'), 'bin'), (received, total) => {
+      const path = await downloadFfmpeg(installDir(), (received, total) => {
         if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('ffmpeg:install-progress', { received, total })
       })
       clearDetectCache()
@@ -594,7 +650,7 @@ function setupIPC() {
   // deno 自动安装：yt-dlp 解 YouTube 签名挑战所需的 JS 运行时；装完自动重试出错的视频任务
   ipcMain.handle('deno:install', async () => {
     try {
-      const path = await downloadDeno(join(app.getPath('userData'), 'bin'), (received, total) => {
+      const path = await downloadDeno(installDir(), (received, total) => {
         if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('deno:install-progress', { received, total })
       })
       clearDetectCache()
@@ -763,6 +819,8 @@ function setupIPC() {
   })
 
   ipcMain.handle('settings:get', () => ({ success: true, data: { ...loadSettings(), downloadDir: torrentEngine.effectiveDownloadDir(), logDir: logger.logDir(), launchOnStartup: app.getLoginItemSettings().openAtLogin } }))
+  // 自动安装/内置资源的可用性：设置页据此决定显示「一键安装」还是平台说明，避免向用户抛 pip/brew 之类的命令
+  ipcMain.handle('installer:capabilities', () => ({ success: true, data: installCapabilities() }))
 
   ipcMain.handle('settings:set', (_event, patch: Record<string, unknown>) => {
     const next = { ...loadSettings(), ...patch }
@@ -841,13 +899,16 @@ app.whenReady().then(async () => {
   }
   // 没抢到单实例锁的进程直接退出，不做任何启动工作（不起 aria2、不建窗口）
   if (!hasSingleInstanceLock) return
-  Menu.setApplicationMenu(null)
+  setupAppMenu()
   // Windows 通知需要与打包配置一致的 AppUserModelID
   app.setAppUserModelId('com.btviewer.app')
   logger.cleanup()
   logger.info('launch', `启动参数：${process.argv.slice(1).join(' ')}`)
   const settings = loadSettings()
   applyNativeTheme(settings.theme)
+  // 安装包内置的 ffmpeg/ffprobe（macOS）在这里落到 userData/bin：用户装完即可用，不需要任何命令行操作
+  const seeded = seedBundledMedia()
+  if (seeded.length) logger.info('launch', `已就绪内置媒体工具：${seeded.join(', ')}`)
   applyMagnetRegistration(settings.registerMagnet === true)
   applyClipboardWatch(settings.clipboardWatch === true)
   torrentEngine.configure(engineConfig(settings))
@@ -872,9 +933,8 @@ app.whenReady().then(async () => {
   // 首次启动时命令行里带的种子/磁力（含打包后的文件关联双击）
   deliverInputs(process.argv.slice(1))
 
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) void createWindow()
-  })
+  // 点 Dock 图标 / ⌘Tab 切回来：窗口可能已关闭（mac 关闭窗口 = 关窗不退出），重建即可
+  app.on('activate', () => { showMainWindow() })
 })
 
 // 二次启动（双击种子、点磁力链接、重复点图标）：把输入交给已有实例，然后自己退出
@@ -887,9 +947,13 @@ app.on('second-instance', (_event, argv) => {
 app.on('open-url', (event, url) => { event.preventDefault(); deliverInputs([url]) })
 app.on('open-file', (event, path) => { event.preventDefault(); deliverInputs([path]) })
 
+// 窗口全部关闭：mac 留在 Dock（点图标由 activate 重建窗口），Windows 留在托盘，都只停 aria2/转码、不退出进程。
+// 真正退出由托盘「退出」/菜单「退出 ⌘Q」/before-quit 负责。
 app.on('window-all-closed', () => {
   void shutdown().finally(() => {
-    if (process.platform !== 'darwin') app.quit()
+    // Linux/Windows 无托盘（closeToTray 关闭或托盘创建失败）且没有常驻入口时，隐藏窗口会让进程永远驻留；
+    // 其它平台仍保留驻留，供托盘/菜单栏再次唤起。
+    if (process.platform !== 'darwin' && !tray) app.quit()
   })
 })
 

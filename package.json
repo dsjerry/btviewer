@@ -19,7 +19,9 @@
     "smoke": "node scripts/smoke.mjs",
     "package:dir": "npm run build && electron-builder --win --dir",
     "package:win": "npm run build && electron-builder --win",
-    "package:mac": "npm run build && electron-builder --mac",
+    "package:mac": "npm run build && electron-builder --mac --universal",
+    "package:mac:x64": "npm run build && electron-builder --mac --x64",
+    "package:mac:arm64": "npm run build && electron-builder --mac --arm64",
     "package:linux": "npm run build && electron-builder --linux",
     "release": "npm run verify && npm run build && electron-builder --publish always"
   },

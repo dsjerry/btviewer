@@ -9,6 +9,7 @@ const electronAPI: ElectronAPI = {
   closeWindow: () => ipcRenderer.invoke('window:close'),
   addTask: (input: string) => ipcRenderer.invoke('torrent:add', input),
   checkYtDlp: (customPath?: string) => ipcRenderer.invoke('ytdlp:check', customPath),
+  installerCapabilities: () => ipcRenderer.invoke('installer:capabilities'),
   installYtDlp: () => ipcRenderer.invoke('ytdlp:install'),
   updateYtDlp: (binaryPath: string) => ipcRenderer.invoke('ytdlp:update', binaryPath),
   installFfmpeg: () => ipcRenderer.invoke('ffmpeg:install'),
@@ -109,6 +110,12 @@ const electronAPI: ElectronAPI = {
     const listener = (_event: Electron.IpcRendererEvent, input: unknown) => callback(String(input ?? ''))
     ipcRenderer.on('app:clipboard-input', listener)
     return () => ipcRenderer.removeListener('app:clipboard-input', listener)
+  },
+  // 原生菜单（macOS 菜单栏）跳转视图
+  onNavigate: (callback) => {
+    const listener = (_event: Electron.IpcRendererEvent, view: unknown) => callback(String(view ?? ''))
+    ipcRenderer.on('app:navigate', listener)
+    return () => ipcRenderer.removeListener('app:navigate', listener)
   },
   ignoreClipboardInput: (input: string) => ipcRenderer.invoke('clipboard:ignore', input),
   listLogs: () => ipcRenderer.invoke('logs:list'),

@@ -1,0 +1,2 @@
+# 二进制资源：Windows 构建检出时必须保持 CRLF 原样，否则 aria2c.exe 会被判为损坏
+resources/aria2/** -text -diff

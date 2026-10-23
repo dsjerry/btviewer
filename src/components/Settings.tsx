@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { ipc } from '../services/ipc'
-import type { LogEntry, LogFileInfo } from '../services/ipc'
+import type { InstallCapabilities, LogEntry, LogFileInfo } from '../services/ipc'
 import { t } from '../services/i18n'
 import pkg from '../../package.json'
 import { validateListenPort, validateRetries, validateSeedMinutes, validateSeedRatio, validateSizeLimit } from '../services/validate'
@@ -87,7 +87,7 @@ const Settings: React.FC<{ theme: ThemeMode; onThemeChange: (mode: ThemeMode) =>
   const [saving, setSaving] = useState(false)
   const [notice, setNotice] = useState<{ type: 'error' | 'success'; text: string } | null>(null)
   // yt-dlp 可用性：页面打开时自动检测一次，也可手动重新检测
-  const [ytdlpState, setYtdlpState] = useState<{ checking: boolean; available?: boolean; ffmpeg?: boolean; jsRuntime?: { name: string; path: string; version?: string } | null; path?: string }>({ checking: false })
+  const [ytdlpState, setYtdlpState] = useState<{ checking: boolean; available?: boolean; ffmpeg?: boolean; jsRuntime?: { name: string; path: string; version?: string } | null; path?: string; capabilities?: InstallCapabilities }>({ checking: false })
   // yt-dlp 自动安装进度（主进程实时推送）
   const [installProgress, setInstallProgress] = useState<{ received: number; total: number } | null>(null)
   // ffmpeg 自动安装进度
@@ -115,7 +115,7 @@ const Settings: React.FC<{ theme: ThemeMode; onThemeChange: (mode: ThemeMode) =>
     setYtdlpState({ checking: true })
     try {
       const result = await ipc.checkYtDlp(path)
-      if (result.success && result.data) setYtdlpState({ checking: false, available: result.data.available, ffmpeg: result.data.ffmpegAvailable, jsRuntime: result.data.jsRuntime, path: result.data.path })
+      if (result.success && result.data) setYtdlpState({ checking: false, available: result.data.available, ffmpeg: result.data.ffmpegAvailable, jsRuntime: result.data.jsRuntime, path: result.data.path, capabilities: result.data.capabilities })
       else setYtdlpState({ checking: false, available: false })
     } catch { setYtdlpState({ checking: false, available: false }) }
   }
@@ -388,7 +388,9 @@ const Settings: React.FC<{ theme: ThemeMode; onThemeChange: (mode: ThemeMode) =>
                   : <p className="field-error">{t('settings.noJsRuntime')}</p>}
                 <div className="settings-row">
                   {!ytdlpState.jsRuntime && <button className="small-button" onClick={() => void installDeno()} disabled={!!denoProgress}>{denoProgress ? t('settings.downloading') : t('settings.installDeno')}</button>}
-                  {!ytdlpState.ffmpeg && <button className="small-button" onClick={() => void installFfmpeg()} disabled={!!ffmpegProgress}>{ffmpegProgress ? t('settings.downloading') : t('settings.installFfmpeg')}</button>}
+                  {!ytdlpState.ffmpeg && (ytdlpState.capabilities?.ffmpeg === false
+                    ? <span className="field-hint">{t('settings.ffmpegUnavailable')}</span>
+                    : <button className="small-button" onClick={() => void installFfmpeg()} disabled={!!ffmpegProgress}>{ffmpegProgress ? t('settings.downloading') : t('settings.installFfmpeg')}</button>)}
                   <button className="small-button" onClick={() => void updateYtdlp()} disabled={ytdlpState.checking}>{t('settings.checkYtdlpUpdate')}</button>
                 </div>
                 {denoProgress && (
@@ -407,9 +409,9 @@ const Settings: React.FC<{ theme: ThemeMode; onThemeChange: (mode: ThemeMode) =>
             )}
             {ytdlpState.available === false && (
               <>
-                <p className="field-error">{t('settings.noYtdlp')}</p>
+                <p className="field-error">{ytdlpState.capabilities?.ytdlp === false ? t('settings.noYtdlpManual') : t('settings.noYtdlp')}</p>
                 <div className="settings-row">
-                  <button className="small-button" onClick={() => void installYtdlp()} disabled={!!installProgress}>{installProgress ? t('settings.downloading') : t('settings.installYtdlp')}</button>
+                  {ytdlpState.capabilities?.ytdlp !== false && <button className="small-button" onClick={() => void installYtdlp()} disabled={!!installProgress}>{installProgress ? t('settings.downloading') : t('settings.installYtdlp')}</button>}
                 </div>
                 {installProgress && (
                   <div className="install-progress">

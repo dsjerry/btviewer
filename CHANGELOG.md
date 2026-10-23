@@ -2,6 +2,32 @@
 
 > 本文件从 1.1.0 起维护；更早版本的变更请查看 [GitHub Releases](https://github.com/dsjerry/btviewer/releases)。
 
+## [Unreleased]
+
+### 变更
+
+- 内置 macOS Apple 芯片版 aria2c（1.37.0，AppleTLS + 静态 c-ares，ad-hoc 签名），mac 版开箱可用
+- aria2 二进制改为按 `平台-架构` 分目录（`resources/aria2/<win|mac|linux>-<x64|arm64>/`），打包时只复制当前构建目标的那份；新增 `resolveAria2Binary` 纯函数并补单测
+- `npm run package:mac` 默认出 universal 包，另提供 `package:mac:x64` / `package:mac:arm64`
+
+### 修复
+- **macOS / Linux 不再要求用户敲 `pip install yt-dlp`**
+  - yt-dlp 自动安装覆盖三平台：官方 `yt-dlp_macos`（universal）、`yt-dlp_linux`、`yt-dlp_linux_aarch64`、Windows arm64/x86 构建，统一 SHA2-256SUMS 校验
+  - deno 自动安装覆盖三平台（zip 解压用系统自带工具：Windows tar.exe、macOS ditto、Linux unzip）
+  - macOS 安装包内置 ffmpeg/ffprobe（Apple 芯片原生，libx264 + VideoToolbox），启动时自动就绪，不需要下载
+  - Apple 芯片上不再尝试下载只有 Intel 版的 evermeet 构建：直接给出可执行的下一步，而不是让用户看到「架构不匹配」
+  - 安装完成的二进制统一补 0755 权限（macOS 下载文件默认不可执行）
+  - Linux 上仅当 ffmpeg 无法一键安装时给出面向普通用户的提示（软件中心安装），不再出现开发者向命令
+
+- **macOS**
+  - 侧栏标题为窗口左上角红绿灯按钮留出空间（`html[data-platform='darwin']`）
+  - 保留最小可用的原生菜单（应用 / 编辑 / 窗口），修复清空菜单导致 ⌘C/⌘V/⌘W 失效；新增「设置…」（⌘,）与菜单跳转事件 `app:navigate`
+  - 关窗改为真正的关闭窗口（应用留在 Dock），点 Dock 图标或 ⌘Tab 经 `activate` 重建窗口；mac 不再创建菜单栏托盘图标
+  - 开机自启改用登录项 `openAsHidden`，不再向登录项塞自定义参数
+- 关窗后主进程驻留时，`window-all-closed` 只停 aria2/转码、不退出进程；引擎 `destroy()` 改为幂等，避免重复清理
+- 无托盘的 Windows/Linux 环境关窗后不再残留后台进程
+- 诊断信息新增「aria2 路径 / 未找到」一项，便于排查分平台发布时二进制放错目录
+
 ## [1.1.0]
 
 ### 新增

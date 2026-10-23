@@ -7,9 +7,19 @@ directories:
 # 因此不需要把 node_modules 一起分发
 files:
   - release/app/**/*
+# aria2 按「平台-架构」分目录（resources/aria2/<win|mac|linux>-<x64|arm64>/），
+# 每个平台只带自己那份，避免 mac 包里塞进 Windows 的 exe、或把 Linux ELF 当 mac 二进制。
+# ${os} 与 electron-builder 的归档标识一致：win / mac（含 mac-arm64 等后缀由 ${arch} 区分）。
 extraResources:
-  - from: resources/aria2
-    to: aria2
+  - from: resources/aria2/${os}-${arch}
+    to: aria2/${os}-${arch}
+    filter:
+      - "**/*"
+  # 内置媒体工具（ffmpeg/ffprobe）同样按平台-架构分目录；缺失时应用会自动走在线安装/系统 PATH
+  - from: resources/media/${os}-${arch}
+    to: media/${os}-${arch}
+    filter:
+      - "**/*"
   - from: resources/icon.png
     to: icon.png
 # 文件关联与协议注册在安装期完成（比运行期写注册表可靠）：
@@ -52,6 +62,20 @@ mac:
     - zip
   icon: resources/icon.icns
   category: public.app-category.utilities
+  # universal 包必须同时保留 resources/aria2/mac-x64 与 mac-arm64 两份 aria2：
+  # universal 运行时 process.arch 是当前真实架构，resolveAria2Binary 会按它选目录。
+  # 签名只从环境变量取（CI secrets 里没配 CSC_NAME 时不签名，本地构建不会报错）。
+  # 分发前提：developer-id 签名 + 公证，否则 Gatekeeper 会直接拦下，且 10.13+ 的开机自启也注册不上。
+  # 凭据从环境变量读（CI secrets）：CSC_LINK / CSC_KEY_PASSWORD / APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID
+  identity: "${env.CSC_NAME}"
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  extendInfo:
+    # 与 win 的 AppUserModelID / 协议注册保持一致
+    CFBundleURLTypes:
+      - CFBundleURLName: Magnet Link
+        CFBundleURLSchemes:
+          - magnet
 linux:
   target:
     - AppImage

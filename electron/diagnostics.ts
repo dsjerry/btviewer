@@ -26,7 +26,8 @@ export interface DiagnosticInput {
   }
   network: EngineNetworkStatus | null
   tasks: { total: number; downloading: number; connecting: number; parsing: number; seeding: number; paused: number; error: number }
-  binaries: { ffmpeg: string | null; ytdlp: string | null; jsRuntime: string | null }
+  // aria2 缺失是「引擎起不来」的首因（尤其按平台/架构分目录后放错位置）
+  binaries: { ffmpeg: string | null; ytdlp: string | null; jsRuntime: string | null; aria2?: string | null }
   recentErrors: string[]
 }
 
@@ -65,6 +66,7 @@ export function buildDiagnostics(input: DiagnosticInput): string {
     line('系统', `${input.platform} ${input.arch}`),
     '',
     '[外挂依赖]',
+    line('aria2', binaries.aria2 ? hide(binaries.aria2) : '未找到内置 aria2（下载引擎无法启动）'),
     line('ffmpeg', binaries.ffmpeg ? hide(binaries.ffmpeg) : '未找到（兼容播放/封面提取不可用）'),
     line('yt-dlp', binaries.ytdlp ? hide(binaries.ytdlp) : '未找到（视频站点解析不可用）'),
     line('JS 运行时', binaries.jsRuntime || '未找到（YouTube 高画质解析受限）'),

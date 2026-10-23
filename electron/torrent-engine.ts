@@ -119,10 +119,26 @@ function buildMagnetURI(hash: string, name: string, trackers: string[] = []) {
   for (const tracker of trackers) params.push(`tr=${encodeURIComponent(tracker)}`)
   return `magnet:?${params.join('&')}`
 }
+// aria2 二进制按「平台/架构」分目录：resources/aria2/<platform>-<arch>/aria2c[.exe]
+// 同一份包里可能有多个架构（universal 或未拆分），所以先按 process.arch 精确命中，再退回旧布局。
+const ARIA2_PLATFORM = process.platform === 'win32' ? 'win' : process.platform === 'darwin' ? 'mac' : 'linux'
+const ARIA2_ARCH = process.arch === 'arm64' ? 'arm64' : 'x64'
+function aria2ResourceRoot() {
+  return app.isPackaged ? join(process.resourcesPath, 'aria2') : join(app.getAppPath(), 'resources', 'aria2')
+}
+// 打包/开发时若只放了一份与当前架构一致的二进制（如 CI 单架构构建），也能直接跑
+export function resolveAria2Binary(root: string, platform = ARIA2_PLATFORM, arch = ARIA2_ARCH): string | null {
+  const name = platform === 'win' ? 'aria2c' : 'aria2c'
+  const candidates = [
+    join(root, `${platform}-${arch}`, platform === 'win' ? `${name}.exe` : name),
+    // 兼容本次改造前的布局（也是 Linux 版的兜底位置）
+    join(root, platform === 'win' ? `${name}.exe` : name)
+  ]
+  return candidates.find((path) => existsSync(path)) || null
+}
 function executablePath() {
-  const name = process.platform === 'win32' ? 'aria2c.exe' : 'aria2c'
-  const bundled = app.isPackaged ? join(process.resourcesPath, 'aria2', name) : join(app.getAppPath(), 'resources', 'aria2', name)
-  return process.env.ARIA2C_PATH || (existsSync(bundled) ? bundled : 'aria2c')
+  const bundled = resolveAria2Binary(aria2ResourceRoot())
+  return process.env.ARIA2C_PATH || bundled || 'aria2c'
 }
 function trackerList(override = '') {
   // 优先级：设置页自定义 > ARIA2_TRACKERS 环境变量 > 内置快照
@@ -437,7 +453,9 @@ class TorrentEngine {
       try { await this.rpc('aria2.getVersion', []); return } catch (error) { if (this.process !== child) throw error; await new Promise((resolve) => setTimeout(resolve, 150)) }
     }
     this.process = null
-    try { await this.rpc('aria2.getVersion', []) } catch { throw new Error(spawnErrorCode === 'ENOENT' ? '未找到 aria2c，请安装 aria2 或配置 ARIA2C_PATH' : `aria2 启动失败：${startupError || 'RPC 服务未响应'}`) }
+    try { await this.rpc('aria2.getVersion', []) } catch { throw new Error(spawnErrorCode === 'ENOENT'
+      ? `未找到 aria2c（${binary}），请安装 aria2 或配置 ARIA2C_PATH；分平台发布时应放在 resources/aria2/${ARIA2_PLATFORM}-${ARIA2_ARCH}/`
+      : `aria2 启动失败：${startupError || 'RPC 服务未响应'}`) }
   }
 
   private async respawnAria2(attempts = 3) {
@@ -1448,6 +1466,8 @@ class TorrentEngine {
   }
 
   async destroy() {
+    // 关窗只停引擎、进程继续驻留（见 main.ts 的 window-all-closed），重复调用要幂等
+    if (this.destroying) return
     this.destroying = true
     if (this.timer) clearInterval(this.timer)
     this.timer = null

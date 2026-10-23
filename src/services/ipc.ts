@@ -1,6 +1,8 @@
 import type { AppSettings, BatchAddSummary, CompatPlanResult, CompatProgressEvent, CompatStartResult, EngineNetworkStatus, Feed, GlobalStat, IPCResult, TaskImportSummary, TaskPeer, TorrentStatus, WatchProgress } from '../types'
 
-export interface YtdlpCheck { available: boolean; path: string; ffmpegAvailable: boolean; jsRuntime: { name: string; path: string; version?: string } | null }
+// capabilities：该平台能否一键安装，决定设置页显示「安装」按钮还是面向普通用户的说明
+export interface InstallCapabilities { ytdlp: boolean; ffmpeg: boolean; deno: boolean }
+export interface YtdlpCheck { available: boolean; path: string; ffmpegAvailable: boolean; jsRuntime: { name: string; path: string; version?: string } | null; capabilities?: InstallCapabilities }
 
 // 运行日志（C5）：主进程解析好的日志行与文件清单
 export interface LogEntry { time: string; level: string; tag: string; message: string; raw: string }
@@ -12,6 +14,7 @@ export interface ElectronAPI {
   closeWindow: () => Promise<{ success: boolean }>
   addTask: (input: string) => Promise<IPCResult<TorrentStatus>>
   checkYtDlp: (customPath?: string) => Promise<IPCResult<YtdlpCheck>>
+  installerCapabilities: () => Promise<IPCResult<InstallCapabilities>>
   installYtDlp: () => Promise<IPCResult<string>>
   updateYtDlp: (binaryPath: string) => Promise<IPCResult<string>>
   installFfmpeg: () => Promise<IPCResult<string>>
@@ -73,6 +76,8 @@ export interface ElectronAPI {
   onGlobalStat: (callback: (stat: GlobalStat) => void) => () => void
   onFocusTask: (callback: (infoHash: string) => void) => () => void
   onClipboardInput: (callback: (input: string) => void) => () => void
+  // 原生菜单跳转（macOS 菜单栏「设置…」等），参数是视图名，未知视图由渲染层忽略
+  onNavigate: (callback: (view: string) => void) => () => void
   ignoreClipboardInput: (input: string) => Promise<IPCResult>
   listLogs: () => Promise<IPCResult<LogFileInfo[]>>
   readLogs: (maxLines?: number, fileName?: string) => Promise<IPCResult<{ name: string; entries: LogEntry[] }>>
@@ -109,6 +114,7 @@ export const ipc: ElectronAPI = {
   closeWindow: () => getElectronAPI().closeWindow(),
   addTask: (input) => getElectronAPI().addTask(input),
   checkYtDlp: (customPath) => getElectronAPI().checkYtDlp(customPath),
+  installerCapabilities: () => getElectronAPI().installerCapabilities(),
   installYtDlp: () => getElectronAPI().installYtDlp(),
   updateYtDlp: (binaryPath) => getElectronAPI().updateYtDlp(binaryPath),
   installFfmpeg: () => getElectronAPI().installFfmpeg(),
@@ -170,6 +176,7 @@ export const ipc: ElectronAPI = {
   onGlobalStat: (callback) => getElectronAPI().onGlobalStat(callback),
   onFocusTask: (callback) => getElectronAPI().onFocusTask(callback),
   onClipboardInput: (callback) => getElectronAPI().onClipboardInput(callback),
+  onNavigate: (callback) => getElectronAPI().onNavigate(callback),
   ignoreClipboardInput: (input) => getElectronAPI().ignoreClipboardInput(input),
   listLogs: () => getElectronAPI().listLogs(),
   readLogs: (maxLines, fileName) => getElectronAPI().readLogs(maxLines, fileName),
