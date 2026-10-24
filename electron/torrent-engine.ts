@@ -2,7 +2,7 @@ import { spawn, execFile, type ChildProcessWithoutNullStreams } from 'child_proc
 import { createReadStream, existsSync, mkdirSync, readFileSync, rmdirSync, rmSync, statSync } from 'fs'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'http'
 import { app } from 'electron'
-import { join, basename, dirname, isAbsolute, relative, resolve } from 'path'
+import { join, basename, dirname, relative, resolve } from 'path'
 import { createHash, randomBytes } from 'crypto'
 import { XMLParser } from 'fast-xml-parser'
 import { logger } from './logger'
@@ -11,16 +11,18 @@ import { clearDetectCache, detectBinary, detectJsRuntime, jsRuntimeArg, parsePro
 import { PRIORITIZE_TAIL, ariaSize, prioritizePieceOption } from './stream-priority'
 import { compatCommand, parseFfmpegProgress, parseMediaInfo, parseProbeJson, planCompatPlayback, probeCommand, type CompatMode, type MediaStreams } from './media-transcode'
 import { parseByteRange } from './http-range'
+import { buildRangeResponse, getMime, isAttachableSubtitle, isWithinRoot, parseStreamRoute, tokenMatches } from './stream-server'
 import { computeProgress, computeTimeRemaining, isFinished as isFinishedBytes, mapAriaState, retryDelayMs, selectFileIndexes } from './aria-status'
 import { extractEmbeddedCover } from './cover-art'
 import type { ChildProcess } from 'child_process'
 import type { CompatProgressEvent, GlobalStat, TaskProtocol, TorrentFileInfo, TorrentStatus } from '../src/types'
 
+// 渲染层用 fetch 探测数据就绪（跨源），需要放行这些预检头；真正的内容访问仍由 token 把关
+const CORS_PREFLIGHT = { 'access-control-allow-origin': '*', 'access-control-allow-methods': 'GET, OPTIONS', 'access-control-allow-headers': 'range' }
 const VIDEO_EXTENSIONS = ['.mp4', '.mkv', '.avi', '.mov', '.webm', '.flv', '.wmv', '.m4v', '.ts', '.rmvb']
 const AUDIO_EXTENSIONS = ['.mp3', '.flac', '.wav', '.aac', '.ogg', '.m4a', '.wma']
 const SUBTITLE_EXTENSIONS = ['.srt', '.ass', '.ssa', '.vtt', '.sub']
 // Chromium 原生只渲染 VTT：vtt 直接可用，srt 可本地无损转换；ass/ssa/sub 需要特效渲染库，暂不支持
-const ATTACHABLE_SUBTITLES = ['.srt', '.vtt']
 const RPC_VERSION = 'aria2'
 // 内置公共 tracker 快照（来源 ngosang/trackerslist best，2026-09），裸磁力链只能靠 DHT 找节点，
 // 部分网络会屏蔽 DHT 而 tracker 可用，注入后可大幅提高解析成功率；ARIA2_TRACKERS 可整体覆盖
@@ -98,7 +100,8 @@ function parseMetalink(xml: string): Array<{ name: string; urls: string[] }> {
 
 function getFileType(filename: string): TorrentFileInfo['type'] { const ext = filename.toLowerCase().slice(filename.lastIndexOf('.')); if (VIDEO_EXTENSIONS.includes(ext)) return 'video'; if (AUDIO_EXTENSIONS.includes(ext)) return 'audio'; if (SUBTITLE_EXTENSIONS.includes(ext)) return 'subtitle'; return 'other' }
 function getErrorMessage(error: unknown) { return error instanceof Error ? error.message : String(error) }
-function isUnderRoot(root: string, path: string) { const rel = relative(resolve(root), resolve(path)); return !!rel && !rel.startsWith('..') && !isAbsolute(rel) }
+// 兼容已有调用方（main.ts 的 shell:open-path）：判定逻辑集中在 stream-server
+const isUnderRoot = isWithinRoot
 function toNumber(value: string | undefined) { return Number(value || 0) || 0 }
 // 只读取子进程输出、不因退出码拒绝：ffmpeg -i 探测本就会以退出码 1 结束
 function runCapture(binary: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
@@ -1277,8 +1280,7 @@ class TorrentEngine {
     const hash = infoHash.toLowerCase()
     const status = this.statuses.get(hash)
     const file = status?.files?.find((item) => item.path === filePath || basename(item.path) === filePath)
-    const ext = file ? file.path.toLowerCase().slice(file.path.lastIndexOf('.')) : ''
-    if (!status || !file || !ATTACHABLE_SUBTITLES.includes(ext)) throw new Error('字幕文件不存在或格式不支持')
+    if (!status || !file || !isAttachableSubtitle(file.path)) throw new Error('字幕文件不存在或格式不支持')
     return `http://127.0.0.1:${this.serverPort}/subtitle/${encodeURIComponent(hash)}/${file.index}?token=${this.streamToken}`
   }
 
@@ -1406,40 +1408,41 @@ class TorrentEngine {
     let url: URL
     try { url = new URL(request.url || '/', `http://127.0.0.1:${this.serverPort}`) } catch { response.writeHead(400); response.end(); return }
     // 随机 token 防止本机其它进程或浏览器页面（CSRF/DNS rebinding）读取下载内容
-    if (url.searchParams.get('token') !== this.streamToken) { response.writeHead(403); response.end(); return }
+    if (!tokenMatches(url.searchParams.get('token'), this.streamToken)) { response.writeHead(403); response.end(); return }
     // 渲染层用 fetch 探测数据就绪状态（跨源），需要放行 CORS 预检；安全性由 token 保证
-    if (request.method === 'OPTIONS') { response.writeHead(204, { 'access-control-allow-origin': '*', 'access-control-allow-methods': 'GET, OPTIONS', 'access-control-allow-headers': 'range' }); response.end(); return }
+    if (request.method === 'OPTIONS') { response.writeHead(204, { ...CORS_PREFLIGHT }); response.end(); return }
     const cors = { 'access-control-allow-origin': '*' }
+    const route = parseStreamRoute(url.pathname)
+    if (route.kind === 'unknown') { response.writeHead(404, cors); response.end(); return }
     // 兼容播放副本：转码输出在下载目录的 .btviewer-compat 下，走同一套 token 与 Range 逻辑
-    const compatMatch = url.pathname.match(/^\/compat\/([^/]+)$/)
-    if (compatMatch) { this.serveCompatFile(request, response, decodeURIComponent(compatMatch[1]), cors); return }
-    const match = url.pathname.match(/^\/stream\/([^/]+)\/(\d+)$/)
-    if (!match) { response.writeHead(404, cors); response.end(); return }
+    if (route.kind === 'compat') { this.serveCompatFile(request, response, route.id, cors); return }
     // 字幕路由：srt 在内存中转成 vtt 后整体返回（字幕文件都很小，无需 Range）
-    const subtitleMatch = url.pathname.match(/^\/subtitle\/([^/]+)\/(\d+)$/)
-    if (subtitleMatch) {
-      const hash = decodeURIComponent(subtitleMatch[1])
-      const status = this.statuses.get(hash)
-      const file = status?.files?.find((item) => item.index === subtitleMatch[2])
-      const ext = file ? file.path.toLowerCase().slice(file.path.lastIndexOf('.')) : ''
-      if (!file || !ATTACHABLE_SUBTITLES.includes(ext)) { response.writeHead(404, cors); response.end('Subtitle not found'); return }
-      const path = resolve(file.path)
-      if (!isUnderRoot(resolve(status!.dir || this.dataDir), path)) { response.writeHead(403, cors); response.end(); return }
-      let body: Buffer
-      try { body = Buffer.from(srtToVtt(readFileSync(path, 'utf8')), 'utf8') } catch { response.writeHead(404, cors); response.end('File not ready'); return }
-      response.writeHead(200, { ...cors, 'content-type': 'text/vtt; charset=utf-8', 'content-length': body.length, 'cache-control': 'no-store' })
-      response.end(body)
-      return
-    }
-    const hash = decodeURIComponent(match[1])
+    if (route.kind === 'subtitle') { this.serveSubtitle(response, route.id, route.fileIndex || '', cors); return }
+    this.serveTaskFile(request, response, route.id, route.fileIndex || '', cors)
+  }
+
+  // 任务文件：先按路由找到 aria2 文件记录，再做目录越界检查
+  private serveTaskFile(request: IncomingMessage, response: ServerResponse, hash: string, fileIndex: string, cors: Record<string, string>) {
     const status = this.statuses.get(hash)
     if (!status) { response.writeHead(404, cors); response.end('Task not found'); return }
-    const file = status.files?.find((item) => item.index === match[2])
+    const file = status.files?.find((item) => item.index === fileIndex)
     if (!file) { response.writeHead(404, cors); response.end('File not found'); return }
-    const root = resolve(status.dir || this.dataDir)
     const path = resolve(file.path)
-    if (!isUnderRoot(root, path)) { response.writeHead(403, cors); response.end(); return }
+    if (!isWithinRoot(resolve(status.dir || this.dataDir), path)) { response.writeHead(403, cors); response.end(); return }
     this.serveFileRange(request, response, path, cors)
+  }
+
+  // 字幕：srt 转 vtt 后整段返回（体积小，不做 Range）
+  private serveSubtitle(response: ServerResponse, hash: string, fileIndex: string, cors: Record<string, string>) {
+    const status = this.statuses.get(hash)
+    const file = status?.files?.find((item) => item.index === fileIndex)
+    if (!file || !isAttachableSubtitle(file.path)) { response.writeHead(404, cors); response.end('Subtitle not found'); return }
+    const path = resolve(file.path)
+    if (!isWithinRoot(resolve(status!.dir || this.dataDir), path)) { response.writeHead(403, cors); response.end(); return }
+    let body: Buffer
+    try { body = Buffer.from(srtToVtt(readFileSync(path, 'utf8')), 'utf8') } catch { response.writeHead(404, cors); response.end('File not ready'); return }
+    response.writeHead(200, { ...cors, 'content-type': getMime(path), 'content-length': body.length, 'cache-control': 'no-store' })
+    response.end(body)
   }
 
   // 兼容播放副本：/compat/:id（id 是本次转码会话，只有生成完成才可读）
@@ -1447,22 +1450,22 @@ class TorrentEngine {
     const entry = this.compatFiles.get(id)
     if (!entry || !entry.complete) { response.writeHead(404, cors); response.end('Transcode not ready'); return }
     const path = resolve(entry.path)
-    if (!isUnderRoot(resolve(this.effectiveDownloadDir()), path)) { response.writeHead(403, cors); response.end(); return }
+    if (!isWithinRoot(resolve(this.effectiveDownloadDir()), path)) { response.writeHead(403, cors); response.end(); return }
     this.serveFileRange(request, response, path, cors)
   }
 
-  // Range 读取：/stream 与 /compat 共用（单一范围，bytes=-N 后缀范围；空文件不再走到 createReadStream 崩溃）
+  // Range 读取：/stream 与 /compat 共用；响应头由 buildRangeResponse 统一决定（有单测）
   private serveFileRange(request: IncomingMessage, response: ServerResponse, path: string, cors: Record<string, string>) {
-    let fileStat: ReturnType<typeof statSync>
-    try { fileStat = statSync(path) } catch { response.writeHead(404, cors); response.end('File not ready'); return }
-    const size = fileStat.size
-    const range = parseByteRange(request.headers.range, size)
-    if (range.kind === 'empty') { response.writeHead(200, { ...cors, 'content-type': getMime(path), 'content-length': 0 }); response.end(); return }
-    if (range.kind === 'invalid') { response.writeHead(416, { ...cors, 'content-range': `bytes */${size}` }); response.end(); return }
-    const headers: Record<string, string | number> = { ...cors, 'content-type': getMime(path), 'content-length': range.end - range.start + 1, 'accept-ranges': 'bytes' }
-    if (range.kind === 'partial') headers['content-range'] = `bytes ${range.start}-${range.end}/${size}`
-    response.writeHead(range.kind === 'partial' ? 206 : 200, headers)
-    createReadStream(path, { start: range.start, end: range.end }).pipe(response)
+    let size: number
+    try { size = statSync(path).size } catch { response.writeHead(404, cors); response.end('File not ready'); return }
+    const result = buildRangeResponse(parseByteRange(request.headers.range, size), size, path, cors)
+    response.writeHead(result.status, result.headers)
+    if (!result.body) { response.end(); return }
+    const stream = createReadStream(path, { start: result.body.start, end: result.body.end })
+    // 播放器 seek 会中断上一个请求：不销毁读流会持续占用文件句柄
+    stream.on('error', () => { try { response.destroy() } catch { /* 已断开 */ } })
+    response.on('close', () => stream.destroy())
+    stream.pipe(response)
   }
 
   async destroy() {
@@ -1493,6 +1496,5 @@ class TorrentEngine {
     this.process = null
   }
 }
-function getMime(filename: string) { const ext = filename.toLowerCase().slice(filename.lastIndexOf('.')); return ({ '.mp4': 'video/mp4', '.webm': 'video/webm', '.mkv': 'video/x-matroska', '.mp3': 'audio/mpeg', '.flac': 'audio/flac', '.wav': 'audio/wav', '.ogg': 'audio/ogg' } as Record<string, string>)[ext] || 'application/octet-stream' }
 export const torrentEngine = new TorrentEngine()
 export { buildMagnetURI, getFileType, infoHashFromMagnet, isUnderRoot, parseMetalink, srtToVtt, stableKey, torrentInfoHash, trackerList }

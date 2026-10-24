@@ -10,6 +10,13 @@
 - aria2 二进制改为按 `平台-架构` 分目录（`resources/aria2/<win|mac|linux>-<x64|arm64>/`），打包时只复制当前构建目标的那份；新增 `resolveAria2Binary` 纯函数并补单测
 - `npm run package:mac` 改为只出 Apple 芯片（arm64）包，universal 移到 `package:mac:universal`
 
+### 重构
+
+- 本地媒体流服务（`/stream`、`/subtitle`、`/compat`）从 `torrent-engine.ts` 拆出纯逻辑到 `electron/stream-server.ts`：
+  路由解析、token 常量时间比较、目录越界判定、Range 响应头统一由纯函数决定，并补 15 例单测
+  （含 `../` 穿越、`/stream/abc/../1` 注入、非法百分号转义、416/空文件等分支）
+- 流式读取补上中断处理：播放器 seek 打断请求时销毁读流，避免文件句柄泄漏
+
 ### 优化
 
 - 任务状态去重不再用 `JSON.stringify` 比较整棵对象树（含 files 数组）：改为逐字段比较，
