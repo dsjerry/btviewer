@@ -208,10 +208,12 @@ Linux aria2 使用的动态库（`libaria2.so.0` 等）放在同一目录，或�
 
 > 内置媒体工具放在 `resources/media/<os>-<arch>/`，启动时自动复制到用户数据目录，用户无需任何操作；
 > 当前提供 `mac-arm64`（ffmpeg/ffprobe 7.1.1，libx264 + VideoToolbox，仅依赖系统库，ad-hoc 签名），
-> 由 ffmpeg 7.1.1 源码在本机编译（`--enable-libx264 --enable-videotoolbox`）；SHA-256 `55af1920…6fbaf2`（ffmpeg）、`7ebd8d9e…2b975e`（ffprobe）。
+> 由 ffmpeg 7.1.1 源码在本机编译（`--enable-libx264 --enable-videotoolbox`）；SHA-256 `aac9f523…6cba6c`（ffmpeg）、`2c946f48…00a121`（ffprobe）。
 
-内置的 `mac-arm64/aria2c` 由官方 aria2 1.37.0 源码在本机 Apple 芯片上编译（静态链接 c-ares，AppleTLS，BitTorrent 支持），
-只依赖系统自带库（libz / libSystem / Security / CoreFoundation / libc++），已做 ad-hoc 签名；SHA-256 `fd02dd6b…439af3`。
+内置的 `mac-arm64/aria2c` 由官方 aria2 1.37.0 源码在本机 Apple 芯片上编译（静态链接 c-ares 1.34.9，AppleTLS，BitTorrent 支持），
+只依赖系统自带库（libz / libSystem / Security / CoreFoundation / libc++），已做 ad-hoc 签名；SHA-256 `ca68feea…cbba51`。
+以上二进制均以 `MACOSX_DEPLOYMENT_TARGET=11.0` 构建：若跟随本机系统用默认部署目标，编出的二进制会引用旧系统没有的符号
+（如 macOS 26 才加入的 `_pipe2`），在 macOS 11–14 等真实用户机器上 dyld 加载即中止；CI 会校验 minos 防回归。
 `mac-x64` 仍需自行补一份 Intel 二进制（官方 1.35.0 的 `aria2-1.35.0-osx-darwin` 即 x86_64，可直接使用）。
 
 ### macOS 签名状态

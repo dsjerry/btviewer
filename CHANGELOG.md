@@ -17,7 +17,8 @@
 - 签名证书/公证凭据全部走 secrets，缺失时自动降级并在日志给出 warning；最终包既非 Developer ID
   也非 ad-hoc 时 CI 直接失败，避免发布一个双击就无法打开的包
 - Release 正文自动附加安装说明（macOS 首次打开方式、Windows SmartScreen、Linux 安装命令）
-- README 新增安装章节与签名状态对照表，说明未签名构建不支持开机自启
+  - README 新增安装章节与签名状态对照表，说明未签名构建不支持开机自启
+- CI 校验内置 macOS 二进制的部署目标（`vtool` 读 minos）：高于 runner 系统版本直接失败，防止再提交旧系统无法运行的二进制
 
 ### 修复
 - **macOS / Linux 不再要求用户敲 `pip install yt-dlp`**
@@ -36,6 +37,9 @@
 - 关窗后主进程驻留时，`window-all-closed` 只停 aria2/转码、不退出进程；引擎 `destroy()` 改为幂等，避免重复清理
 - 无托盘的 Windows/Linux 环境关窗后不再残留后台进程
 - 诊断信息新增「aria2 路径 / 未找到」一项，便于排查分平台发布时二进制放错目录
+- 内置 macOS 二进制（aria2c 1.37.0 / ffmpeg / ffprobe 7.1.1）改用 `MACOSX_DEPLOYMENT_TARGET=11.0` 重建，特性与依赖不变：
+  此前跟随本机系统默认目标编译，二进制引用了 macOS 13/14+ 才有的符号（aria2c 静态链接的 c-ares 还引用了 macOS 26 才加入的 `_pipe2`），
+  在真实用户机器（macOS 11–14）和 CI runner 上 dyld 加载即中止
 
 ## [1.1.0]
 

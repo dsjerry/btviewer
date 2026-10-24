@@ -53,10 +53,14 @@ jobs:
         if: startsWith(matrix.os, 'macos')
         shell: bash
         run: |
+          runner_major=$(sw_vers -productVersion | cut -d. -f1)
           for bin in resources/aria2/mac-arm64/aria2c resources/media/mac-arm64/ffmpeg resources/media/mac-arm64/ffprobe; do
             file "$bin"
             lipo -archs "$bin" | grep -q arm64 || { echo "::error::$bin 不是 arm64"; exit 1; }
             test -x "$bin" || { echo "::error::$bin 缺少执行权限"; exit 1; }
+            # 部署目标(minos)高于 runner 系统版本的二进制在旧系统上 dyld 加载即中止（如新 SDK 默认目标引入的 _pipe2）
+            minos=$(vtool -show "$bin" | sed -n 's/.*minos \([0-9]*\).*/\1/p' | head -1)
+            [ "$minos" -le "$runner_major" ] || { echo "::error::$bin 部署目标(minos) $minos 高于 runner 的 macOS $runner_major；请以 MACOSX_DEPLOYMENT_TARGET=11.0 重建"; exit 1; }
           done
       - name: 设置版本号
         env:

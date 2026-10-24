@@ -129,7 +129,7 @@ resources/
 > On Linux yt-dlp and deno are also one-click; ffmpeg is best left to the distribution package manager.
 >
 > Bundled media tools live in `resources/media/<os>-<arch>/` and are copied into the user data folder on startup.
-> `mac-arm64` currently ships ffmpeg/ffprobe 7.1.1 (libx264 + VideoToolbox, system libraries only, ad-hoc signed; SHA-256 `55af1920…6fbaf2` / `7ebd8d9e…2b975e`).
+> `mac-arm64` currently ships ffmpeg/ffprobe 7.1.1 (libx264 + VideoToolbox, system libraries only, ad-hoc signed; SHA-256 `aac9f523…6cba6c` / `2c946f48…00a121`).
 
 `electron-builder.yml` copies only the `${os}-${arch}` subdirectory of `resources/aria2` into the app resources, and uses `resources/icon.ico` / `icon.icns` / `icon.png` (regenerate with `node scripts/generate-icons.mjs` after editing `logo.svg`). Lay out the binaries as:
 
@@ -153,7 +153,7 @@ Ad-hoc signing only removes the spurious "damaged" error caused by unsigned arm6
 bypass Gatekeeper's "unidentified developer" prompt — that requires a Developer ID certificate. CI fails the
 build if the bundle ends up neither Developer ID nor ad-hoc signed.
 
-The bundled `mac-arm64/aria2c` is built from aria2 1.37.0 sources on Apple silicon (static c-ares, AppleTLS, BitTorrent enabled) and only links system libraries (libz / libSystem / Security / CoreFoundation / libc++); it is ad-hoc signed, SHA-256 `fd02dd6b…439af3`. For `mac-x64`, the official `aria2-1.35.0-osx-darwin` build (x86_64) works as-is.
+The bundled `mac-arm64/aria2c` is built from aria2 1.37.0 sources on Apple silicon (static c-ares, AppleTLS, BitTorrent enabled) and only links system libraries (libz / libSystem / Security / CoreFoundation / libc++); it is ad-hoc signed, SHA-256 `ca68feea…cbba51`. All three binaries are built with `MACOSX_DEPLOYMENT_TARGET=11.0`: the SDK default follows the build machine's OS version, and such binaries reference symbols missing on older macOS (e.g. `_pipe2`, added in macOS 26), making dyld abort at load; CI guards the deployment target (minos) against the runner's OS version. For `mac-x64`, the official `aria2-1.35.0-osx-darwin` build (x86_64) works as-is.
 
 ## Installing on macOS
 
