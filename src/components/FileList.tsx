@@ -1,3 +1,4 @@
+import { sameTorrentFile } from '../services/torrent-diff'
 import React, { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { ipc } from '../services/ipc'
 import { formatSize, statusLabel, taskType, typeLabel, watchLabel, watchPercent } from '../services/task-meta'
@@ -68,7 +69,7 @@ interface FileRowProps { infoHash: string; file: TorrentFileInfo; onPlayFile: (f
 const FileRow = memo<FileRowProps>(({ infoHash, file, onPlayFile }) => {
   const percent = file.size ? Math.min(100, Math.round((file.completed / file.size) * 100)) : 0
   return <div className="file-item"><div className="file-name">{parseEpisode(file.name) && <span className="file-episode" title="识别到的季集">{episodeLabel(parseEpisode(file.name))}</span>}{file.type === 'video' ? <VideoThumb infoHash={infoHash} file={file} className="file-icon video" fallback="▶" /> : <span className={`file-icon ${file.type}`}>{icons[file.type]}</span>}<strong title={file.name}>{file.name}</strong></div><span className="file-progress"><span className="bar"><span style={{ width: `${percent}%` }} /></span><small>{percent}%</small></span><span className="file-type">{fileTypeLabel(file.type)}</span><span className="file-size">{formatSize(file.size)}</span>{file.type === 'video' || file.type === 'audio' ? <button className="play-button" onClick={() => onPlayFile(file)}>播放 <span>↗</span></button> : <span />}</div>
-}, (a, b) => a.infoHash === b.infoHash && a.onPlayFile === b.onPlayFile && JSON.stringify(a.file) === JSON.stringify(b.file))
+}, (a, b) => a.infoHash === b.infoHash && a.onPlayFile === b.onPlayFile && sameTorrentFile(a.file, b.file))
 
 const FileList: React.FC<FileListProps> = ({ torrent, torrents, onSelectTorrent, onPlayFile, onResumeTorrent, onRemove, onBack }) => {
   const [query, setQuery] = useState('')

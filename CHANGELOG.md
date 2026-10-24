@@ -8,7 +8,19 @@
 
 - 内置 macOS Apple 芯片版 aria2c（1.37.0，AppleTLS + 静态 c-ares，ad-hoc 签名），mac 版开箱可用
 - aria2 二进制改为按 `平台-架构` 分目录（`resources/aria2/<win|mac|linux>-<x64|arm64>/`），打包时只复制当前构建目标的那份；新增 `resolveAria2Binary` 纯函数并补单测
-- `npm run package:mac` 默认出 universal 包，另提供 `package:mac:x64` / `package:mac:arm64`
+- `npm run package:mac` 改为只出 Apple 芯片（arm64）包，universal 移到 `package:mac:universal`
+
+### 优化
+
+- 任务状态去重不再用 `JSON.stringify` 比较整棵对象树（含 files 数组）：改为逐字段比较，
+  100 任务 × 200 文件时单次判定从 3.2ms 降到 0.09ms（约 35 倍），列表或文件行 memo 都不会再因
+  「内容没变但对象是新的」触发重渲染
+- 设置页按平台能力显示开关：mac 上不再出现无效的「关闭窗口时最小化到托盘」；未签名的 mac 构建
+  不再显示「开机自启」，改为说明如何在系统设置里手动添加
+- 开机自启改为回读系统登录项状态：系统拒绝登记时（mac 未签名 / 不在 /Applications）如实回到关闭态
+  并写入日志，不再显示一个并不生效的「已开启」
+- 主进程所有输出统一走 `logger`（窗口加载失败、引擎启动、二次启动等），打包版也能在应用内日志页看到；
+  只有 `--diagnostics` 的 stdout 仍保留 `console`
 
 ### 构建与发布
 

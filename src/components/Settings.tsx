@@ -7,11 +7,12 @@ import { validateListenPort, validateRetries, validateSeedMinutes, validateSeedR
 import { POST_ACTION_LABELS } from '../../electron/post-action'
 import type { AppSettings, EngineNetworkStatus, Language, PostAction, ThemeMode } from '../types'
 
-interface SettingsState { downloadDir: string; trackers: string; maxConcurrentDownloads: number; speedLimit: string; httpSplit: number; ytdlpPath: string; ytdlpBrowser: string; proxy: string; logDir: string; closeToTray?: boolean; launchOnStartup?: boolean; notifyOnComplete?: boolean; registerMagnet?: boolean; clipboardWatch?: boolean; postAction: PostAction; listenPort: string; enableDht: boolean; enablePex: boolean; enableLpd: boolean; btEncryption: 'auto' | 'require'; seedMode: 'off' | 'ratio' | 'time'; seedRatio: number; seedMinutes: number; streamPriority: boolean; autoRetry: boolean; maxRetries: number }
+interface SettingsState { capabilities?: { closeToTray: boolean; launchOnStartup: boolean }; downloadDir: string; trackers: string; maxConcurrentDownloads: number; speedLimit: string; httpSplit: number; ytdlpPath: string; ytdlpBrowser: string; proxy: string; logDir: string; closeToTray?: boolean; launchOnStartup?: boolean; notifyOnComplete?: boolean; registerMagnet?: boolean; clipboardWatch?: boolean; postAction: PostAction; listenPort: string; enableDht: boolean; enablePex: boolean; enableLpd: boolean; btEncryption: 'auto' | 'require'; seedMode: 'off' | 'ratio' | 'time'; seedRatio: number; seedMinutes: number; streamPriority: boolean; autoRetry: boolean; maxRetries: number }
 
 // 主进程返回的设置 → 组件状态（缺省值集中在一处，避免加载/保存两条路径漂移）
 function toState(data: AppSettings, fallback: { logDir: string }): SettingsState {
   return {
+    capabilities: data.capabilities,
     downloadDir: data.downloadDir || '',
     trackers: data.trackers || '',
     maxConcurrentDownloads: data.maxConcurrentDownloads || 5,
@@ -323,9 +324,12 @@ const Settings: React.FC<{ theme: ThemeMode; onThemeChange: (mode: ThemeMode) =>
           </div>
           <div className="settings-card">
             <h3>{t('settings.window')}</h3>
-            <p>{t('settings.windowHint')}</p>
-            <label className="settings-check"><input type="checkbox" checked={state.closeToTray !== false} onChange={(event) => void saveOption({ closeToTray: event.target.checked })} />{t('settings.closeToTray')}</label>
-            <label className="settings-check"><input type="checkbox" checked={!!state.launchOnStartup} onChange={(event) => void saveOption({ launchOnStartup: event.target.checked })} />{t('settings.launchOnStartup')}</label>
+            <p>{state.capabilities?.closeToTray === false ? t('settings.windowHintMac') : t('settings.windowHint')}</p>
+            {/* 平台能力为 false 时不显示该开关：mac 没有托盘，关窗即关窗；未签名的 mac 构建也注册不了登录项 */}
+            {state.capabilities?.closeToTray !== false && <label className="settings-check"><input type="checkbox" checked={state.closeToTray !== false} onChange={(event) => void saveOption({ closeToTray: event.target.checked })} />{t('settings.closeToTray')}</label>}
+            {state.capabilities?.launchOnStartup !== false
+              ? <label className="settings-check"><input type="checkbox" checked={!!state.launchOnStartup} onChange={(event) => void saveOption({ launchOnStartup: event.target.checked })} />{t('settings.launchOnStartup')}</label>
+              : <p className="field-hint">{t('settings.launchOnStartupUnavailable')}</p>}
             <label className="settings-check"><input type="checkbox" checked={state.notifyOnComplete !== false} onChange={(event) => void saveOption({ notifyOnComplete: event.target.checked })} />{t('settings.notify')}</label>
             <label className="settings-check"><input type="checkbox" checked={state.registerMagnet === true} onChange={(event) => void saveOption({ registerMagnet: event.target.checked })} />{t('settings.registerMagnet')}</label>
             <label className="settings-check"><input type="checkbox" checked={state.clipboardWatch === true} onChange={(event) => void saveOption({ clipboardWatch: event.target.checked })} />{t('settings.clipboardWatch')}</label>

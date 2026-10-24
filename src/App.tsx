@@ -1,5 +1,6 @@
 import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ipc } from './services/ipc'
+import { mergeStatusUpdate, sameTorrentList } from './services/torrent-diff'
 import Home from './components/Home'
 import FileList from './components/FileList'
 import DownloadManager from './components/DownloadManager'
@@ -101,10 +102,13 @@ const App: React.FC = () => {
     try {
       const next = await ipc.getAllStatuses()
       setLoadError(null)
-      setTorrents((current) => JSON.stringify(current) === JSON.stringify(next) ? current : sortStatuses(next))
+      setTorrents((current) => {
+        const sorted = sortStatuses(next)
+        return sameTorrentList(current, sorted) ? current : sorted
+      })
     } catch (error) { setLoadError(error instanceof Error ? error.message : t('app.offline')) } finally { setLoading(false) }
   }, [])
-  useEffect(() => { let unsubscribe: () => void = () => undefined; try { unsubscribe = ipc.onStatusUpdate((status) => setTorrents((current) => { const next = sortStatuses([...current.filter((item) => item.infoHash !== status.infoHash), status]); return JSON.stringify(current) === JSON.stringify(next) ? current : next })); void refreshStatuses() } catch (error) { setLoadError(error instanceof Error ? error.message : '应用初始化失败'); setLoading(false) }; const timer = window.setInterval(() => void refreshStatuses(), 10000); return () => { unsubscribe(); window.clearInterval(timer) } }, [refreshStatuses])
+  useEffect(() => { let unsubscribe: () => void = () => undefined; try { unsubscribe = ipc.onStatusUpdate((status) => setTorrents((current) => mergeStatusUpdate(current, status, sortStatuses))); void refreshStatuses() } catch (error) { setLoadError(error instanceof Error ? error.message : '应用初始化失败'); setLoading(false) }; const timer = window.setInterval(() => void refreshStatuses(), 10000); return () => { unsubscribe(); window.clearInterval(timer) } }, [refreshStatuses])
   const selectedTorrent = useMemo(() => torrents.find((torrent) => torrent.infoHash === selectedHash) ?? null, [selectedHash, torrents])
   // 可挂载到播放器的字幕：Chromium 原生只渲染 VTT（srt 由主进程转换），ass/ssa/sub 暂不支持
   const attachableSubtitles = useMemo(() => selectedTorrent?.files.filter((file) => file.type === 'subtitle' && /\.(srt|vtt)$/i.test(file.name)) ?? [], [selectedTorrent])

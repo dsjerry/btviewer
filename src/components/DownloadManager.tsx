@@ -1,3 +1,4 @@
+import { sameTorrentStatus } from '../services/torrent-diff'
 import React, { memo, useCallback, useEffect, useState } from 'react'
 import { ipc } from '../services/ipc'
 import { statusLabel, typeLabel, taskType } from '../services/task-meta'
@@ -127,7 +128,7 @@ const DownloadCard = memo<CardProps>(({ torrent, busy, expanded, onSelect, onTog
       <button className="small-button danger" disabled={busy} onClick={() => onRemove(torrent)}>{t('downloads.remove')}</button>
     </div>
   </article>
-), (a, b) => a.busy === b.busy && a.expanded === b.expanded && a.onSelect === b.onSelect && a.onToggle === b.onToggle && a.onAction === b.onAction && a.onRemove === b.onRemove && JSON.stringify(a.torrent) === JSON.stringify(b.torrent))
+), (a, b) => a.busy === b.busy && a.expanded === b.expanded && a.onSelect === b.onSelect && a.onToggle === b.onToggle && a.onAction === b.onAction && a.onRemove === b.onRemove && sameTorrentStatus(a.torrent, b.torrent))
 
 const DownloadManager: React.FC<Props> = ({ torrents, onRefresh, onSelect, focusHash, onFocusHandled }) => {
   const [busy, setBusy] = useState<string | null>(null)

@@ -31,7 +31,7 @@ const isDev = !app.isPackaged
 const isDiagnosticsRun = process.argv.includes('--diagnostics')
 const hasSingleInstanceLock = isDiagnosticsRun ? false : app.requestSingleInstanceLock()
 if (!hasSingleInstanceLock && !isDiagnosticsRun) {
-  console.log(`[launch] 已有实例在运行，退出并把输入交给它：${process.argv.slice(1).join(' ')}`)
+  logger.info('launch', `已有实例在运行，退出并把输入交给它：${process.argv.slice(1).join(' ')}`)
   app.quit()
 }
 
@@ -44,7 +44,7 @@ function applyNativeTheme(theme?: string) {
   nativeTheme.themeSource = theme === 'light' || theme === 'dark' ? theme : 'system'
 }
 
-// 开机自启写系统登录项；--hidden 配合托盘静默启动。
+// 开机自启写系统登录项；--hidden 配合静默启动。
 // macOS 走登录项（10.13+ 的 SMAppService 需要已签名且位于 /Applications），用 openAsHidden 而不是
 // path/args 传参——mac 上给登录项塞自定义 argv 不生效；Windows 仍用 arguments 附带 --hidden。
 function applyLoginItem(enabled: boolean) {
@@ -53,6 +53,23 @@ function applyLoginItem(enabled: boolean) {
     return
   }
   app.setLoginItemSettings({ openAtLogin: enabled, path: process.execPath, args: ['--hidden'] })
+}
+
+// 系统实际是否登记了登录项：setLoginItemSettings 失败时不抛错（mac 未签名/未放进应用程序目录时
+// 会被系统静默拒绝），所以必须回读而不是假设写入成功，否则设置页会显示一个并不存在的「已开启」。
+function loginItemEnabled(): boolean {
+  try { return app.getLoginItemSettings().openAtLogin } catch { return false }
+}
+
+// 设置页需要的平台能力：哪些开关在当前平台/构建形态下真的起作用
+function platformCapabilities() {
+  const bundled = app.isPackaged
+  return {
+    // mac 没有托盘，关窗即关窗（应用留 Dock），「最小化到托盘」在 mac 上不适用
+    closeToTray: process.platform !== 'darwin',
+    // 未签名或未放进 /Applications 的 mac 构建无法注册登录项（SMAppService 的限制）
+    launchOnStartup: process.platform !== 'darwin' || bundled
+  }
 }
 
 // 设置 → 引擎配置：映射集中在一处，避免「启动时」与「保存设置时」两个调用点漂移。
@@ -335,7 +352,7 @@ async function createWindow() {
   })
 
   mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription) => {
-    console.error(`[Window] Failed to load (${errorCode}): ${errorDescription}`)
+    logger.error('window', `页面加载失败（${errorCode}）：${errorDescription}`)
   })
 
   // 渲染层加载完成后再投递排队中的外部输入（双击种子时应用可能还没起来）
@@ -349,7 +366,7 @@ async function createWindow() {
       await mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
     }
   } catch (error) {
-    console.error('[Window] Load error:', getErrorMessage(error))
+    logger.error('window', `页面加载异常：${getErrorMessage(error)}`)
   }
 
   mainWindow.on('closed', () => {
@@ -818,7 +835,7 @@ function setupIPC() {
     return { success: true, data: result.filePaths[0] }
   })
 
-  ipcMain.handle('settings:get', () => ({ success: true, data: { ...loadSettings(), downloadDir: torrentEngine.effectiveDownloadDir(), logDir: logger.logDir(), launchOnStartup: app.getLoginItemSettings().openAtLogin } }))
+  ipcMain.handle('settings:get', () => ({ success: true, data: { ...loadSettings(), downloadDir: torrentEngine.effectiveDownloadDir(), logDir: logger.logDir(), launchOnStartup: loginItemEnabled(), capabilities: platformCapabilities() } }))
   // 自动安装/内置资源的可用性：设置页据此决定显示「一键安装」还是平台说明，避免向用户抛 pip/brew 之类的命令
   ipcMain.handle('installer:capabilities', () => ({ success: true, data: installCapabilities() }))
 
@@ -826,11 +843,21 @@ function setupIPC() {
     const next = { ...loadSettings(), ...patch }
     saveSettings(next)
     applyNativeTheme(next.theme)
-    applyLoginItem(next.launchOnStartup === true)
+    if (patch.launchOnStartup !== undefined) {
+      applyLoginItem(next.launchOnStartup === true)
+      // 系统可能拒绝登记（mac 未签名 / 不在 /Applications）：把「实际是否生效」告诉渲染层，
+      // 设置页据此恢复开关状态并提示，而不是显示一个假的「已开启」
+      const actual = loginItemEnabled()
+      if (next.launchOnStartup === true && !actual) {
+        logger.warn('settings', '系统拒绝登记开机自启（macOS 需要已签名并放在 /Applications）')
+        next.launchOnStartup = false
+        saveSettings(next)
+      }
+    }
     applyMagnetRegistration(next.registerMagnet === true)
     applyClipboardWatch(next.clipboardWatch === true)
     torrentEngine.configure(engineConfig(next))
-    return { success: true, data: { ...next, downloadDir: torrentEngine.effectiveDownloadDir(), logDir: logger.logDir(), launchOnStartup: app.getLoginItemSettings().openAtLogin } }
+    return { success: true, data: { ...next, downloadDir: torrentEngine.effectiveDownloadDir(), logDir: logger.logDir(), launchOnStartup: loginItemEnabled(), capabilities: platformCapabilities() } }
   })
 
   ipcMain.handle('shell:open-path', async (_event, path: string) => {
@@ -893,7 +920,8 @@ function applyMagnetRegistration(enabled: boolean) {
 app.whenReady().then(async () => {
   // 命令行诊断输出：打印到 stdout 后退出，不起窗口也不起 aria2（支持让用户直接发回这份文本）
   if (isDiagnosticsRun) {
-    try { console.log(await collectDiagnostics()) } catch (error) { console.error(getErrorMessage(error)) }
+    // --diagnostics 是给用户复制的 stdout 输出，保留 console；失败时同时写日志
+    try { console.log(await collectDiagnostics()) } catch (error) { logger.error('diagnostics', getErrorMessage(error)); console.error(getErrorMessage(error)) }
     app.quit()
     return
   }
@@ -922,9 +950,9 @@ app.whenReady().then(async () => {
   setupIPC()
   try {
     const serverPort = await torrentEngine.startServer()
-    console.log(`[Main] Torrent server started on port ${serverPort}`)
+    logger.info('engine', `媒体流服务已启动，端口 ${serverPort}`)
   } catch (error) {
-    console.error('[Main] Failed to start torrent server:', getErrorMessage(error))
+    logger.error('engine', `媒体流服务启动失败：${getErrorMessage(error)}`)
   }
   await createWindow()
   createTray()

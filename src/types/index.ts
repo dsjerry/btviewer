@@ -192,8 +192,10 @@ export interface AppSettings {
   language?: Language
   // 关闭窗口时是否隐藏到托盘；缺省视为开启
   closeToTray?: boolean
-  // 开机自启（主进程以系统登录项状态回显）
+  // 开机自启（主进程以系统登录项状态回显；系统拒绝登记时会被重置为 false）
   launchOnStartup?: boolean
+  // 设置页读取的平台能力：false 表示该开关在当前平台/构建形态下不起作用，应隐藏或禁用而不是假装生效
+  capabilities?: { closeToTray: boolean; launchOnStartup: boolean }
   // 下载完成桌面通知；缺省视为开启
   notifyOnComplete?: boolean
   // 注册为系统默认磁力链接处理程序（默认关闭：避免抢掉其它 BT 客户端的关联）
