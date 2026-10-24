@@ -75,6 +75,28 @@ jobs:
       - run: npm run build
       - name: 打包（产物稍后统一发布到 Release）
         run: npx electron-builder ${{ matrix.args }} --publish never
+      # 没有 Developer ID 证书时的兜底：对整个 .app 做 ad-hoc 签名。
+      # 剥掉未签名的 arm64 二进制后，macOS 会报「已损坏，无法打开」；ad-hoc 能把这类误报降成一次
+      # 「无法验证开发者」的右键放行。dmg/zip 已经封好，所以这里只改归档里的 .app 并不现实——
+      # 因此先删掉已生成的归档，签完再用 `--prepackaged` 重新封一次。
+      - name: ad-hoc 签名（未配置 Developer ID 时）
+        if: startsWith(matrix.os, 'macos') && env.CSC_LINK == ''
+        shell: bash
+        run: |
+          APP=$(find release -maxdepth 3 -name '*.app' -type d | head -1)
+          [ -n "$APP" ] || { echo "::error::未找到 .app"; exit 1; }
+          # 内置二进制先各自签（--deep 对 hardened runtime 的嵌套可执行文件不可靠）
+          find "$APP/Contents/Resources/aria2" "$APP/Contents/Resources/media" -type f -perm +111 2>/dev/null \
+            | while read -r bin; do codesign --force -s - "$bin"; done
+          codesign --force --deep -s - --options runtime "$APP"
+          codesign --verify --deep --strict "$APP"
+          codesign -dv "$APP" 2>&1 | grep -E "flags|Identifier"
+          # 用签名后的 .app 重新生成 dmg/zip（旧归档先删，否则会被当成已存在而跳过）
+          rm -f release/*.dmg release/*.zip release/*.blockmap release/latest*.yml
+          npx electron-builder --mac --arm64 --prepackaged "$APP" \
+            --config.mac.identity=null --publish never
+          ls -la release/*.dmg release/*.zip
+
       # 打包后自检：mac 包内的 aria2/ffmpeg 必须真的在，且能执行（防止资源目录放错导致「装完不能用」）
       - name: 校验打包产物内的原生依赖（macOS）
         if: startsWith(matrix.os, 'macos')
@@ -90,12 +112,17 @@ jobs:
           "$R/aria2/mac-arm64/aria2c" --version | head -1
           "$R/media/mac-arm64/ffmpeg" -hide_banner -version | head -1
           "$R/media/mac-arm64/ffprobe" -hide_banner -version | head -1
-          # 签过名的包必须能通过静态校验
+          # 签名必须能通过静态校验：Developer ID（已配置证书）或 ad-hoc（上面的兜底步骤）都应通过；
+          # 都没通过说明 app 完全未签名，用户会看到「已损坏」
           if codesign -dv "$APP" 2>&1 | grep -q "Developer ID Application"; then
             codesign --verify --deep --strict "$APP"
-            echo "签名校验通过"
+            echo "Developer ID 签名校验通过"
+          elif codesign -dv "$APP" 2>&1 | grep -q "adhoc"; then
+            codesign --verify --deep --strict "$APP"
+            echo "::warning::ad-hoc 签名（无 Developer ID 证书）：用户首次打开需右键 → 打开，开机自启不可用"
           else
-            echo "::warning::未签名（未配置 CSC_LINK），用户首次打开需手动放行"
+            echo "::error::应用未签名，macOS 会提示「已损坏，无法打开」"
+            exit 1
           fi
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
@@ -127,6 +154,35 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
+      # 下载页必须写清楚「首次打开怎么办」，否则 mac 用户看到系统提示就直接放弃了
+      - name: 生成安装说明
+        id: notes
+        run: |
+          cat > notes.md <<'EOF'
+          ## 安装说明
+
+          ### macOS（Apple 芯片）
+          下载 `BTViewer-*.dmg`，把 BTViewer 拖进「应用程序」。
+
+          本版本**未使用 Apple Developer 证书签名**，首次打开如提示「无法验证开发者」或「已损坏」：
+
+          1. 在「应用程序」里按住 Control 点按 BTViewer → 选择「打开」→ 再点「打开」；
+          2. 若仍被拦截，在终端执行一次：
+             ```bash
+             xattr -dr com.apple.quarantine /Applications/BTViewer.app
+             ```
+
+          > 未签名版本无法注册开机自启；需要的话请在「系统设置 → 通用 → 登录项」里手动添加。
+          > 仅提供 Apple 芯片（arm64）版本，Intel Mac 请从源码构建。
+
+          ### Windows
+          运行 `BTViewer-*-win-x64.exe`。安装时如果 SmartScreen 提示「未知发布者」，点「更多信息 → 仍要运行」。
+
+          ### Linux
+          `AppImage` 直接双击运行；`deb` 用 `sudo apt install ./BTViewer-*.deb` 安装。
+          EOF
+          if [ -n "$GITHUB_OUTPUT" ]; then echo "path=notes.md" >> "$GITHUB_OUTPUT"; fi
+
       - name: 创建 GitHub Release 并附加产物
         uses: softprops/action-gh-release@v2
         with:
@@ -135,5 +191,6 @@ jobs:
           target_commitish: ${{ github.sha }}
           prerelease: ${{ inputs.prerelease }}
           generate_release_notes: true
+          body_path: ${{ steps.notes.outputs.path }}
           files: artifacts/**/*
           fail_on_unmatched_files: true

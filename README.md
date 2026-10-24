@@ -202,7 +202,7 @@ macOS:      resources/aria2/mac-arm64/aria2c        （内置；Intel 需补 mac
 Linux:      resources/aria2/linux-x64/aria2c        （或 linux-arm64）
 ```
 
-`npm run package:mac` 默认出 universal 包，会同时打包 `mac-x64` 与 `mac-arm64` 两份，两个目录都要有可执行文件。
+`npm run package:mac` 出 Apple 芯片（arm64）包；`package:mac:universal` 出 universal 包（需要 `mac-x64` 与 `mac-arm64` 两份二进制都在）。
 
 Linux aria2 使用的动态库（`libaria2.so.0` 等）放在同一目录，或确保目标系统已经安装对应运行库。
 
@@ -213,6 +213,17 @@ Linux aria2 使用的动态库（`libaria2.so.0` 等）放在同一目录，或�
 内置的 `mac-arm64/aria2c` 由官方 aria2 1.37.0 源码在本机 Apple 芯片上编译（静态链接 c-ares，AppleTLS，BitTorrent 支持），
 只依赖系统自带库（libz / libSystem / Security / CoreFoundation / libc++），已做 ad-hoc 签名；SHA-256 `fd02dd6b…439af3`。
 `mac-x64` 仍需自行补一份 Intel 二进制（官方 1.35.0 的 `aria2-1.35.0-osx-darwin` 即 x86_64，可直接使用）。
+
+### macOS 签名状态
+
+| 情况 | 构建结果 | 用户体验 |
+| --- | --- | --- |
+| 未配置任何 secrets | CI 自动做 **ad-hoc 签名**（`codesign -s - --options runtime`），再重新封 dmg/zip | 首次打开需右键→打开；开机自启不可用 |
+| 配置 `CSC_LINK` / `CSC_KEY_PASSWORD` | Developer ID 签名 | 仍需公证才是「双击即开」 |
+| 再加 `APPLE_ID` / `APPLE_APP_SPECIFIC_PASSWORD` / `APPLE_TEAM_ID` | 签名 + 公证 | 双击即开，开机自启可用 |
+
+ad-hoc 签名只能消除「已损坏，无法打开」这类由未签名 arm64 二进制引起的误报，**不能**绕过 Gatekeeper 的
+「无法验证开发者」提示——那需要 Developer ID 证书。CI 会校验最终包：既非 Developer ID 也非 ad-hoc 时直接失败。
 
 本地打包：
 
@@ -226,7 +237,28 @@ npm run package:linux   # Linux AppImage + deb
 
 主进程依赖（如 fast-xml-parser）在构建时内联进主进程包，因此安装包内不再分发 `node_modules`——改动 `electron.vite.config.ts` 的 external 列表时需注意这一点。
 
+## 安装与首次打开（macOS）
+
+发布的 macOS 安装包目前是 **Apple 芯片（arm64）** 版本，且**未使用 Apple Developer 证书签名**
+（签名与公证需要付费的开发者账号）。这不影响下载、播放与内置依赖的自动安装，但首次打开需要手动放行：
+
+1. 把 `BTViewer.app` 拖进「应用程序」；
+2. 按住 <kbd>Control</kbd> 点击应用图标 → 选择「打开」→ 再点一次「打开」；
+3. 若仍提示「已损坏，无法打开」，在终端执行一次：
+
+   ```bash
+   xattr -dr com.apple.quarantine /Applications/BTViewer.app
+   ```
+
+未签名时系统**不允许注册开机自启**：需要在「系统设置 → 通用 → 登录项」里手动添加 BTViewer。
+Intel Mac 目前没有预编译包，可按「开发」一节从源码构建（需要补 `resources/aria2/mac-x64/aria2c`）。
+
 ## 常见问题
+
+### macOS 提示「无法验证开发者」或「已损坏」
+
+见上一节。前者是未签名导致的常规提示，右键「打开」即可；后者通常是二进制被剥掉签名，
+重新下载完整安装包即可（包内 `aria2c`、`ffmpeg/ffprobe` 均已签名）。
 
 ### aria2c ENOENT
 

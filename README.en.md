@@ -139,11 +139,46 @@ macOS:   resources/aria2/mac-arm64/aria2c     (mac-x64 for Intel)
 Linux:   resources/aria2/linux-x64/aria2c     (or linux-arm64)
 ```
 
-`npm run package:mac` builds a universal bundle, which needs both `mac-x64` and `mac-arm64` binaries present.
+`npm run package:mac` builds an Apple silicon (arm64) bundle; `package:mac:universal` produces a universal build, which needs both `mac-x64` and `mac-arm64` binaries present.
+
+### Code signing on macOS
+
+| Setup | Result | User experience |
+| --- | --- | --- |
+| No secrets configured | CI ad-hoc signs the bundle (`codesign -s - --options runtime`) and re-creates the dmg/zip | Right-click → Open on first launch; login item unavailable |
+| `CSC_LINK` / `CSC_KEY_PASSWORD` | Developer ID signature | Still needs notarization for a seamless launch |
+| Plus `APPLE_ID` / `APPLE_APP_SPECIFIC_PASSWORD` / `APPLE_TEAM_ID` | Signed and notarized | Opens normally, login item works |
+
+Ad-hoc signing only removes the spurious "damaged" error caused by unsigned arm64 binaries; it does **not**
+bypass Gatekeeper's "unidentified developer" prompt — that requires a Developer ID certificate. CI fails the
+build if the bundle ends up neither Developer ID nor ad-hoc signed.
 
 The bundled `mac-arm64/aria2c` is built from aria2 1.37.0 sources on Apple silicon (static c-ares, AppleTLS, BitTorrent enabled) and only links system libraries (libz / libSystem / Security / CoreFoundation / libc++); it is ad-hoc signed, SHA-256 `fd02dd6b…439af3`. For `mac-x64`, the official `aria2-1.35.0-osx-darwin` build (x86_64) works as-is.
 
+## Installing on macOS
+
+Released macOS builds are **Apple silicon (arm64) only** and are **not signed with an Apple Developer
+certificate** (code signing and notarization require a paid developer account). Downloading, playback and
+the one-click dependency installation all work; the first launch just needs a manual override:
+
+1. Drag `BTViewer.app` into *Applications*;
+2. <kbd>Control</kbd>-click the app → *Open* → *Open* again;
+3. If macOS still says the app is damaged, run once in Terminal:
+
+   ```bash
+   xattr -dr com.apple.quarantine /Applications/BTViewer.app
+   ```
+
+Unsigned builds cannot register a login item, so enable "open at login" manually under
+*System Settings → General → Login Items*. There is no prebuilt Intel build yet — build from source
+(see *Development*), which also needs `resources/aria2/mac-x64/aria2c`.
+
 ## Troubleshooting
+
+### macOS says "cannot verify the developer" or "is damaged"
+
+See the section above — the warning is expected for unsigned builds. "Damaged" usually means the bundle
+lost its signature; re-download the full package (the bundled `aria2c` and `ffmpeg/ffprobe` are signed).
 
 ### aria2c ENOENT
 

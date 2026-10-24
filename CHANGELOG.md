@@ -10,6 +10,15 @@
 - aria2 二进制改为按 `平台-架构` 分目录（`resources/aria2/<win|mac|linux>-<x64|arm64>/`），打包时只复制当前构建目标的那份；新增 `resolveAria2Binary` 纯函数并补单测
 - `npm run package:mac` 默认出 universal 包，另提供 `package:mac:x64` / `package:mac:arm64`
 
+### 构建与发布
+
+- 未配置 Developer ID 证书时，release 流程对 macOS 包自动做 **ad-hoc 签名**并重新封装 dmg/zip：
+  消除未签名 arm64 二进制导致的「已损坏，无法打开」，用户只需一次右键 → 打开
+- 签名证书/公证凭据全部走 secrets，缺失时自动降级并在日志给出 warning；最终包既非 Developer ID
+  也非 ad-hoc 时 CI 直接失败，避免发布一个双击就无法打开的包
+- Release 正文自动附加安装说明（macOS 首次打开方式、Windows SmartScreen、Linux 安装命令）
+- README 新增安装章节与签名状态对照表，说明未签名构建不支持开机自启
+
 ### 修复
 - **macOS / Linux 不再要求用户敲 `pip install yt-dlp`**
   - yt-dlp 自动安装覆盖三平台：官方 `yt-dlp_macos`（universal）、`yt-dlp_linux`、`yt-dlp_linux_aarch64`、Windows arm64/x86 构建，统一 SHA2-256SUMS 校验
