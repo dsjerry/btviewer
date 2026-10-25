@@ -30,7 +30,7 @@ html[data-theme='light']{
 --glass-surface:rgba(250,251,243,.72);--glass-surface-strong:rgba(250,251,243,.88);--glass-border:rgba(75,84,42,.16);--glass-highlight:rgba(255,255,255,.72);--glass-shadow:rgba(57,66,31,.14);
 }
 
-:root{font-family:'Space Grotesk',sans-serif;color:var(--text);background:var(--bg);font-synthesis:none}*{box-sizing:border-box}body{margin:0;min-width:760px;height:100vh;overflow:hidden;background:var(--bg)}html[data-platform='darwin'] .app-sidebar{padding-top:50px}button,input,textarea{font:inherit}button{cursor:pointer}button:disabled{cursor:wait;opacity:.55}#root{height:100vh}.app-shell{display:flex;height:100%;background:var(--bg)}.app-sidebar{width:230px;flex:none;padding:28px 18px 22px;background:var(--bg-sidebar);border-right:1px solid var(--border-topbar);display:flex;flex-direction:column;overflow:hidden;transition:width .2s;user-select:none}.app-sidebar.is-collapsed{width:76px;padding-inline:12px}.brand{display:flex;align-items:center;gap:11px;width:100%;padding:0 10px 38px;border:0;background:transparent;color:inherit;text-align:left;font-size:20px;font-weight:700;-webkit-app-region:no-drag;cursor:pointer}.brand:focus-visible{outline:1px solid var(--border-focus);outline-offset:-2px}.brand-mark{flex:none;width:29px;height:29px;border-radius:8px}.brand-name span{color:var(--accent-text)}.is-collapsed .brand-name,.is-collapsed .nav-label,.is-collapsed .sidebar-bottom span:not(.online-dot){opacity:0}.main-nav{display:grid;gap:6px}.nav-item{display:flex;align-items:center;gap:13px;width:100%;padding:13px 12px;border:0;border-radius:8px;background:transparent;color:var(--text-label);text-align:left}.nav-item:hover{color:var(--text);background:var(--bg-hover)}.nav-item.is-active{color:var(--nav-active-text);background:var(--bg-accent-active)}.nav-icon{display:flex;align-items:center;justify-content:center;width:20px}.nav-label{font-size:14px}.nav-count{margin-left:auto;min-width:20px;padding:2px 6px;color:var(--text-on-accent);background:var(--accent);border-radius:10px;font-size:11px;text-align:center}.sidebar-bottom{display:flex;align-items:center;gap:9px;margin-top:auto;padding:12px;color:var(--text-dim3);font:12px 'DM Mono',monospace}.online-dot{width:7px;height:7px;background:#9ee66b;border-radius:50%;box-shadow:0 0 10px #9ee66b}
+:root{font-family:'Space Grotesk',sans-serif;color:var(--text);background:var(--bg);font-synthesis:none}*{box-sizing:border-box}body{margin:0;min-width:760px;height:100vh;overflow:hidden;background:var(--bg)}html[data-platform='darwin'] .app-sidebar{padding-top:50px}html[data-platform='darwin'] .window-controls{display:none}html[data-platform='darwin'] .topbar{padding-right:20px}button,input,textarea{font:inherit}button{cursor:pointer}button:disabled{cursor:wait;opacity:.55}#root{height:100vh}.app-shell{display:flex;height:100%;background:var(--bg)}.app-sidebar{width:230px;flex:none;padding:28px 18px 22px;background:var(--bg-sidebar);border-right:1px solid var(--border-topbar);display:flex;flex-direction:column;overflow:hidden;transition:width .2s;user-select:none}.app-sidebar.is-collapsed{width:76px;padding-inline:12px}.brand{display:flex;align-items:center;gap:11px;width:100%;padding:0 10px 38px;border:0;background:transparent;color:inherit;text-align:left;font-size:20px;font-weight:700;-webkit-app-region:no-drag;cursor:pointer}.brand:focus-visible{outline:1px solid var(--border-focus);outline-offset:-2px}.brand-mark{flex:none;width:29px;height:29px;border-radius:8px}.brand-name span{color:var(--accent-text)}.is-collapsed .brand-name,.is-collapsed .nav-label,.is-collapsed .sidebar-bottom span:not(.online-dot){opacity:0}.main-nav{display:grid;gap:6px}.nav-item{display:flex;align-items:center;gap:13px;width:100%;padding:13px 12px;border:0;border-radius:8px;background:transparent;color:var(--text-label);text-align:left}.nav-item:hover{color:var(--text);background:var(--bg-hover)}.nav-item.is-active{color:var(--nav-active-text);background:var(--bg-accent-active)}.nav-icon{display:flex;align-items:center;justify-content:center;width:20px}.nav-label{font-size:14px}.nav-count{margin-left:auto;min-width:20px;padding:2px 6px;color:var(--text-on-accent);background:var(--accent);border-radius:10px;font-size:11px;text-align:center}.sidebar-bottom{display:flex;align-items:center;gap:9px;margin-top:auto;padding:12px;color:var(--text-dim3);font:12px 'DM Mono',monospace}.online-dot{width:7px;height:7px;background:#9ee66b;border-radius:50%;box-shadow:0 0 10px #9ee66b}
 /* 设置页：运行日志（C5） */
 /* 全局的 .settings-row select 固定 280px，这里两个下拉 + 按钮会撑破卡片，改成按比例分配 */
 .log-tools select{flex:1 1 auto;width:auto;min-width:0}
@@ -195,6 +195,29 @@ html[data-theme='light'] .log-line.warn,html[data-theme='light'] .log-line.warn 
 .video-js .vjs-btv-record .vjs-icon-placeholder:before{content:'';display:block;width:14px;height:14px;border:2px solid rgba(255,255,255,.9);border-radius:50%;background:#ff5148;box-shadow:0 0 8px rgba(255,81,72,.55)}
 .video-js .vjs-btv-record.vjs-btv-recording{color:#ff6b5e}
 .video-js .vjs-btv-record.vjs-btv-recording .vjs-icon-placeholder:before{content:'';width:13px;height:13px;border:0;border-radius:3px;background:#ff5148;box-shadow:0 0 8px rgba(255,81,72,.55)}
+/* 播放器控制条内的 3D 视角按钮：文本徽标，开启（非关闭）时点亮 */
+.video-js .vjs-btv-stereo .vjs-icon-placeholder,
+.video-js .vjs-btv-stereo .vjs-icon-placeholder:before{position:static;width:auto;height:auto;line-height:1}
+.video-js .vjs-btv-stereo .vjs-icon-placeholder:before{content:'3D';font-size:1em;font-weight:700;letter-spacing:1px}
+.video-js .vjs-btv-stereo.vjs-btv-stereo-on{color:var(--accent-text)}
+/* extras 面板里的 3D 视角选择按钮：当前项高亮 */
+.small-button.stereo-choice.is-active{color:var(--accent-text);border-color:var(--border-accent-hover);background:var(--bg-accent-soft)}
+/* 红蓝合并/球面画布：盖在 <video> 上（位于控制条/字幕之下）；平面 ew-resize 调视差，球面 grab 旋转视角 */
+.anaglyph-canvas{position:absolute;top:0;left:0;z-index:1;width:100%;height:100%;cursor:ew-resize}
+.anaglyph-canvas.sphere-canvas{cursor:grab}
+.anaglyph-canvas.sphere-canvas:active{cursor:grabbing}
+/* video.js 原生控制条/大播放按钮/字幕层默认没有 z-index，会被 z-index:1 的 3D 画布整个盖住
+   （3D 模式一开控制按钮与字幕就不可见），统一提到画布之上；React 的 .player-overlay 为 z-index:3 仍在其上 */
+.video-js .vjs-control-bar,
+.video-js .vjs-big-play-button,
+.video-js .vjs-text-track-display{z-index:2}
+/* 媒体库「本地视频」引用区：区块标题 + 引用磁贴（文件丢失时降透明度禁播） */
+.library-section-head{display:flex;align-items:center;gap:9px;margin:26px 0 12px;color:var(--text-dim2);font:12px 'DM Mono',monospace;text-transform:uppercase}
+.torrent-tile.local-tile.is-missing{opacity:.55}
+.library-row.local-row.is-missing{opacity:.55}
+/* 导入本地视频按钮：SVG 图标与文字对齐 */
+.library-import{display:inline-flex;align-items:center;gap:6px}
+.library-import svg{flex:none}
 /* 录制中的画面左上角角标 */
 .record-badge{position:absolute;top:16px;left:16px;z-index:3;display:flex;align-items:center;gap:7px;padding:6px 12px;color:#ff8a7d;background:rgba(11,12,10,.72);border-radius:4px;font:12px 'DM Mono',monospace;pointer-events:none}
 .record-badge span{width:8px;height:8px;background:#ff6b5e;border-radius:50%;animation:rec-blink 1s ease-in-out infinite}
@@ -431,9 +454,9 @@ html[data-theme='light'] .download-status.parsing span{background:#8a6d1f}
 .playlist-button:disabled{opacity:.35}
 .playlist-index{min-width:48px;color:#969b8b;font:11px 'DM Mono',monospace}
 .player-stage{position:relative;isolation:isolate;container-type:size;display:flex;align-items:center;justify-content:center;min-height:0;padding:clamp(18px,3.5vw,48px);overflow:hidden;background:radial-gradient(ellipse at 50% 45%,rgba(31,35,34,.36),transparent 68%)}
-.player-container{position:relative;width:min(100cqw,1440px,177.7778cqh);height:auto;aspect-ratio:16/9;overflow:hidden;border:1px solid rgba(226,236,204,.12);border-radius:12px;background:#000;box-shadow:0 26px 90px rgba(0,0,0,.48),0 2px 14px rgba(0,0,0,.25)}
+.player-container{position:relative;width:min(100cqw,177.7778cqh);height:auto;aspect-ratio:16/9;overflow:hidden;border:1px solid rgba(226,236,204,.12);border-radius:12px;background:#000;box-shadow:0 26px 90px rgba(0,0,0,.48),0 2px 14px rgba(0,0,0,.25)}
 .player-container .video-js{border-radius:11px;background:#000}
-.player-overlay{position:absolute;top:50%;left:50%;z-index:3;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px;width:min(100cqw,1440px,177.7778cqh);aspect-ratio:16/9;transform:translate(-50%,-50%);border:1px solid rgba(232,240,210,.1);border-radius:12px;background:rgba(7,9,10,.78);color:#d8dccf;font-size:13px;backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
+.player-overlay{position:absolute;top:50%;left:50%;z-index:3;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px;width:min(100cqw,177.7778cqh);aspect-ratio:16/9;transform:translate(-50%,-50%);border:1px solid rgba(232,240,210,.1);border-radius:12px;background:rgba(7,9,10,.78);color:#d8dccf;font-size:13px;backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
 .player-error{padding:24px;color:#ffb3a8;text-align:center}
 .player-error-actions{display:flex;gap:10px;margin-top:6px}
 /* 兼容播放（B1）：转码进行中的原因说明与头部入口按钮 */

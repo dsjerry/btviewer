@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { ipc } from '../services/ipc'
 import { t } from '../services/i18n'
+import { LOCAL_MEDIA_FILE_RE } from '../services/task-meta'
 import type { TorrentFileInfo, TorrentStatus } from '../types'
 
 interface HomeProps {
@@ -12,6 +13,8 @@ interface HomeProps {
   onDownload: (status: TorrentStatus, filePaths?: string[]) => void
   // 直链/视频任务无需解析选择，加入队列后直接跳转下载页
   onQuickDownload: () => void
+  // 拖入媒体文件（PotPlayer 式）：不经任务流程直接进播放器
+  onDropMedia: (paths: string[]) => void
 }
 
 const typeIcons: Record<TorrentFileInfo['type'], string> = { video: '▶', audio: '♫', subtitle: 'A', other: '•' }
@@ -27,7 +30,7 @@ function size(value: number) {
   return `${(value / 1024 ** i).toFixed(i ? 1 : 0)} ${units[i]}`
 }
 
-const Home: React.FC<HomeProps> = ({ parsingTask, onParsingChange, onTorrentAdded, onPlayFile, onDownload, onQuickDownload }) => {
+const Home: React.FC<HomeProps> = ({ parsingTask, onParsingChange, onTorrentAdded, onPlayFile, onDownload, onQuickDownload, onDropMedia }) => {
   const [magnetUri, setMagnetUri] = useState('')
   const [loading, setLoading] = useState(false)
   const [notice, setNotice] = useState<{ type: 'error' | 'success'; text: string } | null>(null)
@@ -127,9 +130,12 @@ const Home: React.FC<HomeProps> = ({ parsingTask, onParsingChange, onTorrentAdde
     setSelectedFiles(new Set())
   }
 
-  // 拖放解析：优先批量处理所有 .torrent/.metalink 文件与文本中的全部链接
+  // 拖放解析：优先批量处理所有 .torrent/.metalink 文件与文本中的全部链接；
+  // 拖入的是视频/音频文件时改为直接进播放器（PotPlayer 式），不进任务流程
   const dropFiles = async (event: React.DragEvent) => {
     const transfer = event.dataTransfer
+    const mediaPaths = Array.from(transfer.files).filter((item) => LOCAL_MEDIA_FILE_RE.test(item.name)).map((item) => ipc.getPathForFile(item))
+    if (mediaPaths.length) { event.preventDefault(); onDropMedia(mediaPaths); return }
     const taskFiles = Array.from(transfer.files).filter((item) => /\.(torrent|metalink|meta4)$/i.test(item.name)).map((item) => ipc.getPathForFile(item))
     const text = transfer.getData('text/uri-list') || transfer.getData('text/plain')
     const links = text.split(/\s+/).map((item) => item.trim()).filter(isTaskInput)

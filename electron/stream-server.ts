@@ -6,14 +6,14 @@ import { isAbsolute, relative, resolve } from 'path'
 
 export interface StreamRoute {
   // 路由种类；'unknown' 表示不认识的路径（404）
-  kind: 'stream' | 'subtitle' | 'compat' | 'unknown'
-  // stream/subtitle：任务哈希；compat：转码会话 id
+  kind: 'stream' | 'subtitle' | 'compat' | 'local' | 'unknown'
+  // stream/subtitle：任务哈希；compat：转码会话 id；local：本地媒体注册 id
   id: string
   // stream/subtitle：aria2 的文件序号
   fileIndex?: string
 }
 
-// 只认这三种路径；其余一律 unknown（不落盘、不读状态）
+// 只认这四种路径；其余一律 unknown（不落盘、不读状态）
 export function parseStreamRoute(pathname: string): StreamRoute {
   const compat = /^\/compat\/([^/]+)$/.exec(pathname)
   if (compat) return { kind: 'compat', id: decodePart(compat[1]) }
@@ -21,6 +21,8 @@ export function parseStreamRoute(pathname: string): StreamRoute {
   if (stream) return { kind: 'stream', id: decodePart(stream[1]), fileIndex: stream[2] }
   const subtitle = /^\/subtitle\/([^/]+)\/(\d+)$/.exec(pathname)
   if (subtitle) return { kind: 'subtitle', id: decodePart(subtitle[1]), fileIndex: subtitle[2] }
+  const local = /^\/local\/([0-9a-f]+)$/.exec(pathname)
+  if (local) return { kind: 'local', id: local[1] }
   return { kind: 'unknown', id: '' }
 }
 

@@ -1,5 +1,5 @@
 import { spawn, execFile, type ChildProcessWithoutNullStreams } from 'child_process'
-import { createReadStream, existsSync, mkdirSync, readFileSync, rmdirSync, rmSync, statSync } from 'fs'
+import { createReadStream, existsSync, mkdirSync, readFileSync, readdirSync, rmdirSync, rmSync, statSync } from 'fs'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'http'
 import { app } from 'electron'
 import { join, basename, dirname, relative, resolve } from 'path'
@@ -16,6 +16,7 @@ import { computeProgress, computeTimeRemaining, isFinished as isFinishedBytes, m
 import { extractEmbeddedCover } from './cover-art'
 import type { ChildProcess } from 'child_process'
 import type { CompatProgressEvent, GlobalStat, TaskProtocol, TorrentFileInfo, TorrentStatus } from '../src/types'
+import { LOCAL_MEDIA_HASH } from '../src/types'
 
 // 渲染层用 fetch 探测数据就绪（跨源），需要放行这些预检头；真正的内容访问仍由 token 把关
 const CORS_PREFLIGHT = { 'access-control-allow-origin': '*', 'access-control-allow-methods': 'GET, OPTIONS', 'access-control-allow-headers': 'range' }
@@ -196,6 +197,9 @@ class TorrentEngine {
   private dataDir = ''
   private startPromise: Promise<number> | null = null
   private streamToken = randomBytes(16).toString('hex')
+  // 本地媒体注册表：/local/<id> → 绝对路径（仅收录通过文件对话框选中、经 getLocalMediaUrl 登记的文件）；
+  // id 由路径 sha1 派生，重复注册幂等；仍走 token 鉴权与 Range，越权面与 /stream 一致
+  private localMedia = new Map<string, string>()
   private destroying = false
   private spawning: Promise<void> | null = null
   private refreshing = false
@@ -1111,6 +1115,13 @@ class TorrentEngine {
   }
 
   private findMediaFile(infoHash: string, filePath: string) {
+    // 本地媒体：infoHash 是合成值，路径即文件本身（其余字段与 aria2 文件记录对齐，取值方只用 path/length）
+    if (infoHash === LOCAL_MEDIA_HASH) {
+      const path = resolve(filePath)
+      let size: number
+      try { size = statSync(path).size } catch { throw new Error('文件不存在或不可读') }
+      return { path, length: String(size) }
+    }
     const status = this.statuses.get(infoHash.toLowerCase())
     const file = status?.files?.find((item) => item.path === filePath || basename(item.path) === filePath)
     if (!status || !file) throw new Error('媒体文件尚未准备完成')
@@ -1284,6 +1295,42 @@ class TorrentEngine {
     return `http://127.0.0.1:${this.serverPort}/subtitle/${encodeURIComponent(hash)}/${file.index}?token=${this.streamToken}`
   }
 
+  // 本地媒体（不经下载任务）：登记绝对路径并返回 /local 流地址；只接受可识别的媒体/字幕文件
+  getLocalMediaUrl(localPath: string) {
+    const path = resolve(localPath)
+    if (getFileType(path) === 'other') throw new Error('不支持的本地媒体格式')
+    let size: number
+    try { size = statSync(path).size } catch { throw new Error('文件不存在或不可读') }
+    if (!size) throw new Error('文件为空')
+    const id = createHash('sha1').update(path).digest('hex')
+    // 注册表设上限兜底（正常使用远达不到）：超出时淘汰最早登记的条目
+    if (!this.localMedia.has(id) && this.localMedia.size >= 200) {
+      const oldest = this.localMedia.keys().next().value
+      if (oldest) this.localMedia.delete(oldest)
+    }
+    this.localMedia.set(id, path)
+    return `http://127.0.0.1:${this.serverPort}/local/${id}?token=${this.streamToken}`
+  }
+
+  // 本地视频的同目录字幕：收集可挂载的 srt/vtt，同名/同前缀的排前面（最终排序仍由渲染层 rankSubtitles 决定）
+  getLocalSubtitles(videoPath: string): TorrentFileInfo[] {
+    const dir = dirname(resolve(videoPath))
+    let entries: string[]
+    try { entries = readdirSync(dir) } catch { return [] }
+    const stem = basename(videoPath).replace(/\.[^.]+$/, '').toLowerCase()
+    const files: Array<TorrentFileInfo & { priority: number }> = []
+    for (const name of entries) {
+      if (!isAttachableSubtitle(name)) continue
+      const path = resolve(dir, name)
+      let size: number
+      try { size = statSync(path).size } catch { continue }
+      const subStem = name.replace(/\.[^.]+$/, '').toLowerCase()
+      const priority = subStem === stem ? 0 : subStem.startsWith(stem) ? 1 : 2
+      files.push({ name, path, size, completed: size, type: 'subtitle', localPath: path, priority })
+    }
+    return files.sort((a, b) => a.priority - b.priority || a.name.localeCompare(b.name)).map(({ priority: _priority, ...file }) => file)
+  }
+
   private async refreshStatuses() {
     if (this.refreshing) return
     this.refreshing = true
@@ -1418,6 +1465,8 @@ class TorrentEngine {
     if (route.kind === 'compat') { this.serveCompatFile(request, response, route.id, cors); return }
     // 字幕路由：srt 在内存中转成 vtt 后整体返回（字幕文件都很小，无需 Range）
     if (route.kind === 'subtitle') { this.serveSubtitle(response, route.id, route.fileIndex || '', cors); return }
+    // 本地媒体路由：注册表内的磁盘文件，媒体走 Range、字幕走 srt→vtt 转换
+    if (route.kind === 'local') { this.serveLocalFile(request, response, route.id, cors); return }
     this.serveTaskFile(request, response, route.id, route.fileIndex || '', cors)
   }
 
@@ -1451,6 +1500,20 @@ class TorrentEngine {
     if (!entry || !entry.complete) { response.writeHead(404, cors); response.end('Transcode not ready'); return }
     const path = resolve(entry.path)
     if (!isWithinRoot(resolve(this.effectiveDownloadDir()), path)) { response.writeHead(403, cors); response.end(); return }
+    this.serveFileRange(request, response, path, cors)
+  }
+
+  // 本地媒体：/local/:id → 注册表里的绝对路径；字幕整体转换返回，媒体走与 /stream 共用的 Range 逻辑
+  private serveLocalFile(request: IncomingMessage, response: ServerResponse, id: string, cors: Record<string, string>) {
+    const path = this.localMedia.get(id)
+    if (!path) { response.writeHead(404, cors); response.end('Local media not registered'); return }
+    if (isAttachableSubtitle(path)) {
+      let body: Buffer
+      try { body = Buffer.from(srtToVtt(readFileSync(path, 'utf8')), 'utf8') } catch { response.writeHead(404, cors); response.end('File not ready'); return }
+      response.writeHead(200, { ...cors, 'content-type': getMime(path), 'content-length': body.length, 'cache-control': 'no-store' })
+      response.end(body)
+      return
+    }
     this.serveFileRange(request, response, path, cors)
   }
 
@@ -1493,6 +1556,7 @@ class TorrentEngine {
     this.server = null
     this.serverPort = 0
     this.statuses.clear(); this.gidHashes.clear(); this.metadataGids.clear(); this.callbacks.clear()
+    this.localMedia.clear()
     this.process = null
   }
 }

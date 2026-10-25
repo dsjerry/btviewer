@@ -5,6 +5,23 @@ export interface TorrentFileInfo {
   // 已下载字节数（任务进行中会随状态刷新增长），用于单文件进度展示
   completed: number
   type: 'video' | 'audio' | 'subtitle' | 'other'
+  // 本地媒体（不经下载任务，直接播放磁盘文件）：值为文件绝对路径，播放器据此走流服务的 /local 路由
+  localPath?: string
+}
+
+// 本地媒体播放的合成任务哈希：进度存储与兼容转码用它复用同一套键，且不会与真实 infoHash 冲突
+export const LOCAL_MEDIA_HASH = 'local-media'
+
+// 媒体库里的本地视频引用：只存磁盘文件的绝对路径（不复制文件），随应用持久化
+export interface LocalMediaEntry {
+  // 文件绝对路径（引用主键，去重/移除都按它）
+  path: string
+  name: string
+  size: number
+  type: 'video' | 'audio'
+  addedAt: number
+  // 列表时现查：文件当前是否不可访问（移动硬盘未挂载/被删除），播放按钮据此禁用
+  missing?: boolean
 }
 
 export type TorrentStatusType = 'parsing' | 'connecting' | 'downloading' | 'seeding' | 'paused' | 'error'

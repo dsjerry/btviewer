@@ -1,4 +1,5 @@
 import { ipc } from './ipc'
+import { LOCAL_MEDIA_HASH } from '../types'
 
 // 渲染层视频截帧：隐藏 <video> 加载流（支持 Range），seek 后 canvas 截图输出 dataURL
 // 失败结果仅在本次会话内负缓存（文件后续下载完成可能就能截出来了），成功结果持久化到主进程
@@ -68,7 +69,9 @@ async function pump() {
       } catch { /* 没有封面或 ffmpeg 不可用 → 回退截帧 */ }
       if (!result) {
         try {
-          result = await capture(await ipc.getStreamUrl(job.infoHash, job.filePath))
+          // 本地视频引用走 /local 注册路由（infoHash 是合成值），下载任务走 /stream
+          const url = job.infoHash === LOCAL_MEDIA_HASH ? await ipc.getLocalMediaUrl(job.filePath) : await ipc.getStreamUrl(job.infoHash, job.filePath)
+          result = await capture(url)
         } catch { /* 任务可能已被移除，按失败处理 */ }
       }
       memory.set(job.key, result)

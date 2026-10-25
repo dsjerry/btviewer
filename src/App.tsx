@@ -7,10 +7,11 @@ import DownloadManager from './components/DownloadManager'
 import Settings from './components/Settings'
 import Feeds from './components/Feeds'
 import ErrorBoundary from './components/ErrorBoundary'
-import type { GlobalStat, Language, PlaylistEntry, ThemeMode, TorrentStatus, TorrentFileInfo } from './types'
+import type { GlobalStat, Language, LocalMediaEntry, PlaylistEntry, ThemeMode, TorrentStatus, TorrentFileInfo } from './types'
+import { LOCAL_MEDIA_HASH } from './types'
 import { applyTheme, watchSystemTheme } from './services/theme'
 import { setLanguage as applyLanguage, t } from './services/i18n'
-import { formatSpeed } from './services/task-meta'
+import { formatSpeed, localEntryToFile, LOCAL_MEDIA_FILE_RE } from './services/task-meta'
 import { buildPlaylist } from './services/playlist'
 
 type ViewMode = 'home' | 'files' | 'downloads' | 'feeds' | 'player' | 'settings'
@@ -34,6 +35,8 @@ const App: React.FC = () => {
   const [torrents, setTorrents] = useState<TorrentStatus[]>([])
   const [selectedHash, setSelectedHash] = useState<string | null>(null)
   const [playingFile, setPlayingFile] = useState<TorrentFileInfo | null>(null)
+  // 本地视频库（引用磁盘文件，不经下载任务）：列表持久化在主进程，这里只做缓存
+  const [localLibrary, setLocalLibrary] = useState<LocalMediaEntry[]>([])
   // 侧边栏折叠：点击品牌区切换，偏好持久化（与媒体库视图偏好一致）
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem('btviewer-sidebar-collapsed') === '1')
   const toggleCollapsed = useCallback(() => setCollapsed((current) => { const next = !current; localStorage.setItem('btviewer-sidebar-collapsed', next ? '1' : '0'); return next }), [])
@@ -145,7 +148,10 @@ const App: React.FC = () => {
     setClipboardInput(null)
   }, [clipboardInput])
   // 播放列表（B4）：同一部剧的可播文件跨任务聚合，按季/集排序；识别不出季集时退化为当前任务内自然排序
-  const playlist = useMemo(() => buildPlaylist(torrents, selectedTorrent && playingFile ? { infoHash: selectedTorrent.infoHash, file: playingFile, torrentName: selectedTorrent.name } : null), [torrents, selectedTorrent, playingFile])
+  // 本地视频模式：播放列表就是本地库（按名称自然排序）
+  const localFiles = useMemo(() => localLibrary.map(localEntryToFile).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true })), [localLibrary])
+  const localPlaylist = useMemo(() => localFiles.map((file) => ({ infoHash: LOCAL_MEDIA_HASH, file, torrentName: t('app.localPlaylistName') })), [localFiles])
+  const playlist = localPlaylist.length ? localPlaylist : buildPlaylist(torrents, selectedTorrent && playingFile ? { infoHash: selectedTorrent.infoHash, file: playingFile, torrentName: selectedTorrent.name } : null)
   const activeCount = torrents.filter((torrent) => torrent.status === 'downloading' || torrent.status === 'connecting').length
   // 解析中任务的实时状态：从全局任务列表派生（onStatusUpdate 推送与轮询都汇入 torrents）
   const parsingTask = useMemo(() => parsingHash ? torrents.find((torrent) => torrent.infoHash === parsingHash) ?? null : null, [parsingHash, torrents])
@@ -162,6 +168,58 @@ const App: React.FC = () => {
     if (!result.success) setLoadError(result.error || t('app.mediaStartFailed'))
   }, [])
   const playParsedFile = useCallback((status: TorrentStatus, file: TorrentFileInfo) => void startPlay(status, file), [startPlay])
+  // ── 本地视频库 ──────────────────────────────────────────────
+  // 列表加载/刷新（导入、移除后主进程都会返回最新列表；切到本地 tab 也会再刷一次 missing 状态）
+  const refreshLocalLibrary = useCallback(async () => {
+    const result = await ipc.localList().catch(() => null)
+    if (result?.success && result.data) setLocalLibrary(result.data)
+  }, [])
+  useEffect(() => { void refreshLocalLibrary() }, [refreshLocalLibrary])
+  // 对话框导入：只登记进媒体库，不自动播放
+  const importLocal = useCallback(async () => {
+    try {
+      const result = await ipc.pickLocalMedia()
+      if (!result.success || !result.data) return
+      setLocalLibrary(result.data)
+    } catch (error) { setLoadError(error instanceof Error ? error.message : t('app.localPickFailed')) }
+  }, [])
+  // 拖放导入并直接播放（PotPlayer 式）：登记进库后播第一个拖入的文件，播放列表 = 整个本地库
+  const importAndPlay = useCallback(async (paths: string[]) => {
+    try {
+      const result = await ipc.addLocalMedia(paths)
+      if (!result.success || !result.data) return
+      setLocalLibrary(result.data)
+      const dropped = new Set(paths)
+      const added = result.data.filter((entry) => dropped.has(entry.path)).map(localEntryToFile).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))
+      if (!added.length) return
+      setSelectedHash(null)
+      setPlayingFile(added[0])
+      setViewMode('player')
+    } catch (error) { setLoadError(error instanceof Error ? error.message : t('app.localPickFailed')) }
+  }, [])
+  // 从媒体库点播本地视频
+  const playLocalEntry = useCallback((entry: LocalMediaEntry) => {
+    setSelectedHash(null)
+    setPlayingFile(localEntryToFile(entry))
+    setViewMode('player')
+  }, [])
+  // 移除引用（只删记录，不动磁盘文件）
+  const removeLocalEntry = useCallback(async (entry: LocalMediaEntry) => {
+    const result = await ipc.removeLocalMedia(entry.path).catch(() => null)
+    if (result?.success && result.data) setLocalLibrary(result.data)
+  }, [])
+  // 拖放播放（PotPlayer 式）：整组都是媒体文件时直接进播放器；含种子/链接的拖放仍由首页接管
+  const onShellDrop = useCallback((event: React.DragEvent) => {
+    if (event.defaultPrevented) return
+    const paths = Array.from(event.dataTransfer.files).filter((file) => LOCAL_MEDIA_FILE_RE.test(file.name)).map((file) => ipc.getPathForFile(file))
+    if (!paths.length) return
+    event.preventDefault()
+    void importAndPlay(paths)
+  }, [importAndPlay])
+  const onShellDragOver = (event: React.DragEvent) => {
+    // 只对纯媒体拖放接管，避免干扰首页的种子/链接拖放
+    if (!event.defaultPrevented && Array.from(event.dataTransfer.files).some((file) => LOCAL_MEDIA_FILE_RE.test(file.name))) event.preventDefault()
+  }
   // 播放器内切换（上一集/下一集/连播）：同任务文件间切换，保持任务选中状态
   const switchPlayFile = useCallback(async (file: TorrentFileInfo) => {
     const current = selectedTorrentRef.current
@@ -172,6 +230,8 @@ const App: React.FC = () => {
   }, [])
   // 播放列表切换（B4）：同一任务内只切文件，跨任务则连任务一起切过去
   const playEntry = useCallback(async (entry: PlaylistEntry) => {
+    // 本地视频列表内切换：文件本身就是播放源，无需任务与下载
+    if (entry.file.localPath) { setPlayingFile(entry.file); return }
     if (entry.infoHash === selectedTorrentRef.current?.infoHash) return switchPlayFile(entry.file)
     const target = torrentsRef.current.find((torrent) => torrent.infoHash === entry.infoHash)
     if (!target) { setLoadError(t('app.seriesMissing')); return }
@@ -184,7 +244,7 @@ const App: React.FC = () => {
     await refreshStatuses()
   }, [selectedHash, refreshStatuses])
   const downloadParsedTask = useCallback(async (status: TorrentStatus, filePaths?: string[]) => { const result = await ipc.downloadTorrent(status.infoHash, filePaths); if (!result.success) { setLoadError(result.error || '开始下载失败'); return }; await refreshStatuses(); setViewMode('downloads') }, [refreshStatuses])
-  const content = <ErrorBoundary>{loading ? <div className="page-center"><div className="loading-spinner" /><span>{t('shell.connecting')}</span></div> : viewMode === 'home' ? <Home parsingTask={parsingTask} onParsingChange={setParsingHash} onTorrentAdded={added} onPlayFile={playParsedFile} onDownload={(status, filePaths) => void downloadParsedTask(status, filePaths)} onQuickDownload={() => { void refreshStatuses(); setViewMode('downloads') }} /> : viewMode === 'downloads' ? <DownloadManager torrents={torrents} onRefresh={refreshStatuses} onSelect={selectTorrent} focusHash={focusHash} onFocusHandled={() => setFocusHash(null)} /> : viewMode === 'feeds' ? <Feeds /> : viewMode === 'settings' ? <Settings theme={themeMode} onThemeChange={changeTheme} language={language} onLanguageChange={changeLanguage} /> : viewMode === 'player' && selectedTorrent && playingFile ? <Suspense fallback={<div className="page-center"><div className="loading-spinner" /><span>{t('shell.loadingPlayer')}</span></div>}><Player infoHash={selectedTorrent.infoHash} file={playingFile} subtitles={attachableSubtitles} playlist={playlist} onSelectFile={(entry) => void playEntry(entry)} onBack={() => { setPlayingFile(null); setViewMode('files') }} /></Suspense> : <FileList torrent={selectedTorrent} torrents={torrents} onSelectTorrent={selectTorrent} onPlayFile={(file) => { if (selectedTorrent) void startPlay(selectedTorrent, file) }} onResumeTorrent={(item, file) => void startPlay(item, file)} onRemove={(torrent, destroy) => void removeTorrent(torrent, destroy)} onBack={() => setSelectedHash(null)} />}</ErrorBoundary>
-  return <div className="app-shell"><aside className={`app-sidebar ${collapsed ? 'is-collapsed' : ''}`}><button className="brand" onClick={toggleCollapsed} title={collapsed ? t('shell.expandSidebar') : t('shell.collapseSidebar')} aria-label={collapsed ? t('shell.expandSidebar') : t('shell.collapseSidebar')} aria-expanded={!collapsed}><svg className="brand-mark" viewBox="0 0 512 512" aria-hidden="true"><defs><linearGradient id="brand-bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stopColor="#1e1f17"/><stop offset="1" stopColor="#0f0f09"/></linearGradient><linearGradient id="brand-lime" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stopColor="#eaff93"/><stop offset="1" stopColor="#c3e040"/></linearGradient></defs><rect width="512" height="512" rx="112" fill="url(#brand-bg)"/><rect x="151" y="151" width="210" height="210" rx="34" transform="rotate(45 256 256)" fill="url(#brand-lime)"/><path d="M 219 190 L 343 256 L 219 322 Z" fill="#131309"/></svg><span className="brand-name">BT<span>Viewer</span></span><span className="brand-toggle" aria-hidden="true">‹</span></button><nav className="main-nav">{navItems.map((item) => <button key={item.key} className={`nav-item ${(viewMode === item.key || (viewMode === 'player' && item.key === 'files')) ? 'is-active' : ''}`} onClick={() => setViewMode(item.key)}><span className="nav-icon">{item.icon}</span><span className="nav-label">{t(item.labelKey)}</span>{item.key === 'downloads' && activeCount > 0 && <b className="nav-count">{activeCount}</b>}</button>)}</nav><div className="sidebar-bottom"><span className="online-dot" />{!collapsed && (globalStat && (globalStat.downloadSpeed > 0 || globalStat.uploadSpeed > 0) ? <span className="global-speed"><b>↓</b>{formatSpeed(globalStat.downloadSpeed)}<b>↑</b>{formatSpeed(globalStat.uploadSpeed)}</span> : <span>{t('shell.online')}</span>)}<button className={`limit-trigger ${speedLimit ? 'is-on' : ''}`} onClick={() => setLimitOpen((value) => !value)} title={t('shell.limitTitle')}>{speedLimit ? `${t('shell.limit')} ${speedLimit}` : t('shell.limit')}</button>{limitOpen && <div className="limit-popover"><div className="limit-popover-head">{t('shell.limitTitle')}<span>{speedLimit ? t('shell.limitCurrent', { value: speedLimit }) : t('shell.limitNone')}</span></div><div className="limit-presets">{[['', t('shell.limitOff')], ['1M', '1M'], ['3M', '3M'], ['5M', '5M'], ['10M', '10M']].map(([value, label]) => <button key={value || 'off'} className={speedLimit === value ? 'is-active' : ''} onClick={() => void applySpeedLimit(value)}>{label}</button>)}</div><small>{t('shell.limitHint')}</small></div>}</div></aside><main className="app-main"><header className="topbar"><div className="window-drag" /><div className="topbar-right"><button className="refresh-button no-drag" onClick={() => void refreshStatuses()}><span>↻</span> {t('shell.refresh')}</button><div className="window-controls no-drag"><button onClick={() => void ipc.minimizeWindow()} aria-label={t('shell.minimize')}><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M0 5.5h10" stroke="currentColor" strokeWidth="1" /></svg></button><button onClick={() => void ipc.toggleMaximizeWindow()} aria-label={t('shell.maximize')}><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><rect x="0.5" y="0.5" width="9" height="9" fill="none" stroke="currentColor" strokeWidth="1" /></svg></button><button className="close-control" onClick={() => void ipc.closeWindow()} aria-label={t('shell.close')}><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M0.5 0.5l9 9M9.5 0.5l-9 9" stroke="currentColor" strokeWidth="1" /></svg></button></div></div></header>{loadError && <div className="error-banner"><span>!</span>{loadError}<button onClick={() => setLoadError(null)}>×</button></div>}{clipboardInput && <div className="clipboard-banner"><span>⎘</span><span className="clipboard-text" title={clipboardInput}>{t('shell.clipboardDetected', { value: clipboardInput })}</span><button className="small-button" onClick={() => void acceptClipboardInput()}>{t('shell.addTask')}</button><button className="banner-dismiss" onClick={dismissClipboardInput} aria-label={t('shell.dismiss')}>×</button></div>}<section className="content-area">{content}</section></main></div>
+  const content = <ErrorBoundary>{loading ? <div className="page-center"><div className="loading-spinner" /><span>{t('shell.connecting')}</span></div> : viewMode === 'home' ? <Home parsingTask={parsingTask} onParsingChange={setParsingHash} onTorrentAdded={added} onPlayFile={playParsedFile} onDownload={(status, filePaths) => void downloadParsedTask(status, filePaths)} onQuickDownload={() => { void refreshStatuses(); setViewMode('downloads') }} onDropMedia={(paths) => void importAndPlay(paths)} /> : viewMode === 'downloads' ? <DownloadManager torrents={torrents} onRefresh={refreshStatuses} onSelect={selectTorrent} focusHash={focusHash} onFocusHandled={() => setFocusHash(null)} /> : viewMode === 'feeds' ? <Feeds /> : viewMode === 'settings' ? <Settings theme={themeMode} onThemeChange={changeTheme} language={language} onLanguageChange={changeLanguage} /> : viewMode === 'player' && playingFile && (selectedTorrent || playingFile.localPath) ? <Suspense fallback={<div className="page-center"><div className="loading-spinner" /><span>{t('shell.loadingPlayer')}</span></div>}><Player infoHash={playingFile.localPath ? LOCAL_MEDIA_HASH : selectedTorrent?.infoHash || ''} file={playingFile} subtitles={attachableSubtitles} playlist={playlist} onSelectFile={(entry) => void playEntry(entry)} onBack={() => { setPlayingFile(null); setViewMode('files') }} /></Suspense> : <FileList torrent={selectedTorrent} torrents={torrents} onSelectTorrent={selectTorrent} onPlayFile={(file) => { if (selectedTorrent) void startPlay(selectedTorrent, file) }} onResumeTorrent={(item, file) => void startPlay(item, file)} onRemove={(torrent, destroy) => void removeTorrent(torrent, destroy)} onBack={() => setSelectedHash(null)} localLibrary={localLibrary} onImportLocal={() => void importLocal()} onPlayLocalFile={playLocalEntry} onRemoveLocal={(entry) => void removeLocalEntry(entry)} onRefreshLocal={() => void refreshLocalLibrary()} />}</ErrorBoundary>
+  return <div className="app-shell" onDragOver={onShellDragOver} onDrop={onShellDrop}><aside className={`app-sidebar ${collapsed ? 'is-collapsed' : ''}`}><button className="brand" onClick={toggleCollapsed} title={collapsed ? t('shell.expandSidebar') : t('shell.collapseSidebar')} aria-label={collapsed ? t('shell.expandSidebar') : t('shell.collapseSidebar')} aria-expanded={!collapsed}><svg className="brand-mark" viewBox="0 0 512 512" aria-hidden="true"><defs><linearGradient id="brand-bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stopColor="#1e1f17"/><stop offset="1" stopColor="#0f0f09"/></linearGradient><linearGradient id="brand-lime" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stopColor="#eaff93"/><stop offset="1" stopColor="#c3e040"/></linearGradient></defs><rect width="512" height="512" rx="112" fill="url(#brand-bg)"/><rect x="151" y="151" width="210" height="210" rx="34" transform="rotate(45 256 256)" fill="url(#brand-lime)"/><path d="M 219 190 L 343 256 L 219 322 Z" fill="#131309"/></svg><span className="brand-name">BT<span>Viewer</span></span><span className="brand-toggle" aria-hidden="true">‹</span></button><nav className="main-nav">{navItems.map((item) => <button key={item.key} className={`nav-item ${(viewMode === item.key || (viewMode === 'player' && item.key === 'files')) ? 'is-active' : ''}`} onClick={() => setViewMode(item.key)}><span className="nav-icon">{item.icon}</span><span className="nav-label">{t(item.labelKey)}</span>{item.key === 'downloads' && activeCount > 0 && <b className="nav-count">{activeCount}</b>}</button>)}</nav><div className="sidebar-bottom"><span className="online-dot" />{!collapsed && (globalStat && (globalStat.downloadSpeed > 0 || globalStat.uploadSpeed > 0) ? <span className="global-speed"><b>↓</b>{formatSpeed(globalStat.downloadSpeed)}<b>↑</b>{formatSpeed(globalStat.uploadSpeed)}</span> : <span>{t('shell.online')}</span>)}<button className={`limit-trigger ${speedLimit ? 'is-on' : ''}`} onClick={() => setLimitOpen((value) => !value)} title={t('shell.limitTitle')}>{speedLimit ? `${t('shell.limit')} ${speedLimit}` : t('shell.limit')}</button>{limitOpen && <div className="limit-popover"><div className="limit-popover-head">{t('shell.limitTitle')}<span>{speedLimit ? t('shell.limitCurrent', { value: speedLimit }) : t('shell.limitNone')}</span></div><div className="limit-presets">{[['', t('shell.limitOff')], ['1M', '1M'], ['3M', '3M'], ['5M', '5M'], ['10M', '10M']].map(([value, label]) => <button key={value || 'off'} className={speedLimit === value ? 'is-active' : ''} onClick={() => void applySpeedLimit(value)}>{label}</button>)}</div><small>{t('shell.limitHint')}</small></div>}</div></aside><main className="app-main"><header className="topbar"><div className="window-drag" /><div className="topbar-right"><button className="refresh-button no-drag" onClick={() => void refreshStatuses()}><span>↻</span> {t('shell.refresh')}</button><div className="window-controls no-drag"><button onClick={() => void ipc.minimizeWindow()} aria-label={t('shell.minimize')}><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M0 5.5h10" stroke="currentColor" strokeWidth="1" /></svg></button><button onClick={() => void ipc.toggleMaximizeWindow()} aria-label={t('shell.maximize')}><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><rect x="0.5" y="0.5" width="9" height="9" fill="none" stroke="currentColor" strokeWidth="1" /></svg></button><button className="close-control" onClick={() => void ipc.closeWindow()} aria-label={t('shell.close')}><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M0.5 0.5l9 9M9.5 0.5l-9 9" stroke="currentColor" strokeWidth="1" /></svg></button></div></div></header>{loadError && <div className="error-banner"><span>!</span>{loadError}<button onClick={() => setLoadError(null)}>×</button></div>}{clipboardInput && <div className="clipboard-banner"><span>⎘</span><span className="clipboard-text" title={clipboardInput}>{t('shell.clipboardDetected', { value: clipboardInput })}</span><button className="small-button" onClick={() => void acceptClipboardInput()}>{t('shell.addTask')}</button><button className="banner-dismiss" onClick={dismissClipboardInput} aria-label={t('shell.dismiss')}>×</button></div>}<section className="content-area">{content}</section></main></div>
 }
 export default App

@@ -8,6 +8,8 @@ import { srtToVtt } from '../services/subtitle'
 import { episodeLabel, parseEpisode } from '../services/episode'
 import { pickAutoSubtitle, rankSubtitles, subtitleLanguage, type SubtitleCandidate } from '../services/subtitle-match'
 import { formatMark, parseMarksStore, skipDecision, updateMarksStore } from '../services/player-extras'
+import { STEREO_MENU, stereoCropRect, stereoEqual, stereoFromName, stereoDisplay, STEREO_OFF, type StereoLayout, type StereoMode, type StereoOutput, type StereoProjection } from '../services/stereo3d'
+import { StereoGLRenderer, type StereoCamera } from '../services/stereo-gl'
 import { seriesKey } from '../services/episode'
 // 播放位置 → 字节偏移的换算与主进程共用同一实现（纯函数，无 Node 依赖）
 import { byteOffsetFor } from '../../electron/stream-priority'
@@ -20,6 +22,9 @@ type RemoteTrackElement = ReturnType<VjsPlayer['addRemoteTextTrack']> & { track:
 // 自定义控制条按钮（截图/录制）的最小接口；video.js 的 d.ts 对自定义组件支持不完整
 interface VjsControlButton { controlText: (text: string) => void; addClass: (cls: string) => void; removeClass: (cls: string) => void }
 type VjsControlBar = { addChild: (child: unknown, options?: unknown, index?: number) => unknown; children: () => unknown[]; getChild: (name: string) => unknown }
+// 3D 菜单（MenuButton/MenuItem）的最小接口：构造项只需 label/selectable，实例需要选中态与点击监听
+interface VjsMenuItemLike { on: (event: string, handler: () => void) => unknown; selected: (value: boolean) => void }
+type VjsMenuButtonLike = VjsControlButton
 
 interface PlayerProps { infoHash: string; file: TorrentFileInfo; subtitles: TorrentFileInfo[]; playlist: PlaylistEntry[]; onSelectFile: (entry: PlaylistEntry) => void; onBack: () => void }
 
@@ -31,6 +36,9 @@ const MIME: Record<string, string> = {
 videojs.addLanguage('zh-CN', { Subtitles: '字幕', Captions: '字幕', 'subtitles off': '关闭字幕', 'captions off': '关闭字幕', off: '关闭', 'Restore Language': '恢复默认语言' })
 // Chromium 无法解码的常见容器：重试没有意义，直接提示
 const UNSUPPORTED = ['.mkv', '.avi', '.wmv', '.flv', '.rmvb', '.ts']
+// 球面拖拽灵敏度：按视场角 1:1 折算后再乘系数。1:1「抓住世界」在宽视野下轻轻一带
+// 画面就大幅摆动（全屏宽 = 120°+），0.25× 与常见 VR 播放器的从容手感一致
+const STEREO_DRAG_SENSITIVITY = 0.25
 
 function getMime(name: string) { return MIME[name.toLowerCase().slice(name.lastIndexOf('.'))] || 'application/octet-stream' }
 
@@ -117,6 +125,42 @@ const Player: React.FC<PlayerProps> = ({ infoHash, file, subtitles, playlist, on
   // 兼容播放（B1）：内置播放器解不了的编码，用 ffmpeg 生成可播放副本
   const [compat, setCompat] = useState<{ id: string | null; phase: 'idle' | 'preparing' | 'running' | 'error'; percent: number; message: string; container: 'mp4' | 'webm' }>({ id: null, phase: 'idle', percent: 0, message: '', container: 'mp4' })
   const compatRef = useRef(compat); compatRef.current = compat
+  // 3D 视角：SBS/TB 封装可切单眼/红蓝合并/球面 VR180；全局记忆，文件名带布局提示且无记忆时预选
+  const [stereo, setStereo] = useState<StereoMode>(() => {
+    try {
+      const saved = localStorage.getItem('btviewer-stereo')
+      if (saved) {
+        const parsed = JSON.parse(saved) as StereoMode
+        if (parsed && (parsed.layout === 'off' || parsed.layout === 'sbs' || parsed.layout === 'tb') && (parsed.output === 'left' || parsed.output === 'right' || parsed.output === 'anaglyph' || parsed.output === 'dual')) {
+          return { ...parsed, projection: parsed.projection === 'sphere' ? 'sphere' : 'flat' }
+        }
+      }
+    } catch { /* 忽略损坏存储 */ }
+    return stereoFromName(file.name) || STEREO_OFF
+  })
+  const stereoRef = useRef(stereo); stereoRef.current = stereo
+  const changeStereo = (next: StereoMode) => { setStereo(next); localStorage.setItem('btviewer-stereo', JSON.stringify(next)) }
+  // 3D 菜单选项标签：球面按用途命名（全景视角 = 单眼拖拽的 VR 体验；头显分屏 = 给 VR 头显的双目画面）
+  const stereoModeLabel = (mode: StereoMode) => {
+    if (mode.layout === 'off') return t('player.stereoOff')
+    if (mode.projection === 'sphere') {
+      if (mode.output === 'anaglyph') return `${t('player.stereoSphere')} · ${t('player.stereoAnaglyph')}`
+      if (mode.output === 'dual') return `${t('player.stereoSphere')} · ${t('player.stereoHmd')}`
+      const eye = mode.output === 'right' ? `（${t('player.stereoRightEye')}）` : ''
+      return `${t('player.stereoSphere')} · ${t('player.stereoPanorama')}${eye}`
+    }
+    const output = mode.output === 'anaglyph' ? t('player.stereoAnaglyph') : mode.output === 'dual' ? t('player.stereoDual') : mode.output === 'left' ? t('player.stereoLeftEye') : t('player.stereoRightEye')
+    return `${t(mode.layout === 'sbs' ? 'player.stereoSbs' : 'player.stereoTb')} · ${output}`
+  }
+  const stereoMenuRef = useRef<VjsMenuButtonLike | null>(null)
+  const stereoItemsRef = useRef<VjsMenuItemLike[]>([])
+  const stereoSelectRef = useRef<(mode: StereoMode) => void>(() => undefined)
+  stereoSelectRef.current = changeStereo
+  // 红蓝合并/球面渲染：画布盖在 <video> 上逐帧合成；视差与球面视角在拖拽中调整
+  const anaglyphCanvasRef = useRef<HTMLCanvasElement | null>(null)
+  const anaglyphRendererRef = useRef<StereoGLRenderer | null>(null)
+  const parallaxRef = useRef(0)
+  const cameraRef = useRef<StereoCamera>({ yaw: 0, pitch: 0, fov: 90 })
 
   // 播完连播需要读取最新值：列表/回调随任务状态刷新重建，用 ref 提供给一次性注册的事件
   const playlistRef = useRef(playlist); playlistRef.current = playlist
@@ -143,6 +187,8 @@ const Player: React.FC<PlayerProps> = ({ infoHash, file, subtitles, playlist, on
 
   useEffect(() => {
     let active = true
+    // 本地视频的字幕由下方效果单独扫描同目录文件
+    if (file.localPath) return
     void (async () => {
       // 先按「属于当前视频」的程度排序（同名 > 同集 > 整季包 > 其它），再取 URL
       const ranked = rankSubtitles(file.name, subtitles)
@@ -155,6 +201,24 @@ const Player: React.FC<PlayerProps> = ({ infoHash, file, subtitles, playlist, on
     return () => { active = false }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [infoHash, subtitleKey, file.name])
+
+  // 本地视频：扫描同目录的可挂载字幕（srt/vtt），与视频名的匹配度决定顺序与自动选中
+  useEffect(() => {
+    const localPath = file.localPath
+    if (!localPath) return
+    let active = true
+    void (async () => {
+      const result = await ipc.getLocalSubtitles(localPath).catch(() => null)
+      const files = result?.success && result.data ? result.data : []
+      const ranked = rankSubtitles(file.name, files)
+      const items: Array<SubtitleCandidate & { url: string }> = []
+      for (const candidate of ranked) {
+        try { items.push({ ...candidate, url: await ipc.getLocalMediaUrl(candidate.path) }) } catch { /* 单个字幕不可用不影响其它 */ }
+      }
+      if (active) setSubtitleItems(items)
+    })()
+    return () => { active = false }
+  }, [infoHash, file.localPath, file.name])
 
   // 字幕轨挂载：等播放器与字幕 URL 都就绪后执行；按匹配度自动选中首选（本地加载的字幕优先）
   useEffect(() => {
@@ -211,6 +275,165 @@ const Player: React.FC<PlayerProps> = ({ infoHash, file, subtitles, playlist, on
 
   const videoElement = () => (containerRef.current?.querySelector('video') ?? null) as HTMLVideoElement | null
 
+  // ── 3D 视角 ────────────────────────────────────────────────
+  // 单眼：CSS object-view-box 裁剪 + 画幅切到单眼比例；红蓝合并：WebGL 画布接管渲染（拖拽可微调视差）。
+  // 在 loadedmetadata 与设置变化时应用（兼容播放换源后会再次触发 loadedmetadata）
+  const stopStereoGl = () => {
+    anaglyphRendererRef.current?.dispose()
+    anaglyphRendererRef.current = null
+    anaglyphCanvasRef.current?.remove()
+    anaglyphCanvasRef.current = null
+  }
+
+  // 球面视野限制：VR180 只有前方半球有画面，yaw/pitch 收在 fov 覆盖范围内，防拖出黑边
+  const clampCamera = (camera: StereoCamera): StereoCamera => {
+    const fov = Math.min(120, Math.max(30, camera.fov))
+    const limit = Math.max(5, 90 - fov / 2)
+    return { fov, yaw: Math.max(-limit, Math.min(limit, camera.yaw)), pitch: Math.max(-limit, Math.min(limit, camera.pitch)) }
+  }
+  const pushCamera = () => {
+    anaglyphRendererRef.current?.setMode({ projection: 'sphere', layout: stereoRef.current.layout === 'tb' ? 'tb' : 'sbs', output: stereoRef.current.output, camera: cameraRef.current })
+    // 暂停/缓冲时没有新帧回调，拖拽与缩放必须手动重绘
+    anaglyphRendererRef.current?.render()
+  }
+
+  // 拖拽语义随投影切换：球面 = 旋转视角（画面跟手，滚轮缩放，双击复位）；
+  // 平面红蓝 = 水平微调视差（对齐不准的片源），拖一整屏宽约 ±10%
+  const onStereoPointerDown = (event: PointerEvent) => {
+    const canvas = anaglyphCanvasRef.current
+    if (!canvas) return
+    const startX = event.clientX
+    const startY = event.clientY
+    try { canvas.setPointerCapture(event.pointerId) } catch { /* 指针已释放时忽略 */ }
+    if (stereoRef.current.projection === 'sphere') {
+      const startCamera = cameraRef.current
+      const move = (moveEvent: PointerEvent) => {
+        // 按实际视场角折算每像素角度再乘灵敏度系数：水平用水平视场角（全景宽幅下大于垂直），
+        // 分屏时每个视角只占一半宽度
+        const fov = cameraRef.current.fov
+        const boxAspect = canvas.clientWidth > 0 && canvas.clientHeight > 0 ? canvas.clientWidth / canvas.clientHeight : 16 / 9
+        const viewAspect = boxAspect / (stereoRef.current.output === 'dual' ? 2 : 1)
+        const degPerPxX = STEREO_DRAG_SENSITIVITY * (2 * Math.atan(Math.tan((fov / 2) * Math.PI / 180) * viewAspect) * 180 / Math.PI) / Math.max(1, canvas.clientWidth)
+        const degPerPxY = STEREO_DRAG_SENSITIVITY * fov / Math.max(1, canvas.clientHeight)
+        cameraRef.current = clampCamera({ fov, yaw: startCamera.yaw - (moveEvent.clientX - startX) * degPerPxX, pitch: startCamera.pitch + (moveEvent.clientY - startY) * degPerPxY })
+        pushCamera()
+      }
+      const finish = () => {
+        canvas.removeEventListener('pointermove', move)
+        canvas.removeEventListener('pointerup', finish)
+        canvas.removeEventListener('pointercancel', finish)
+      }
+      canvas.addEventListener('pointermove', move)
+      canvas.addEventListener('pointerup', finish)
+      canvas.addEventListener('pointercancel', finish)
+      return
+    }
+    const start = parallaxRef.current
+    const move = (moveEvent: PointerEvent) => {
+      const next = Math.max(-0.1, Math.min(0.1, start + (moveEvent.clientX - startX) / canvas.clientWidth * 0.2))
+      parallaxRef.current = next
+      anaglyphRendererRef.current?.setMode({ projection: 'flat', layout: stereoRef.current.layout === 'tb' ? 'tb' : 'sbs', parallax: next })
+      anaglyphRendererRef.current?.render()
+    }
+    const finish = () => {
+      canvas.removeEventListener('pointermove', move)
+      canvas.removeEventListener('pointerup', finish)
+      canvas.removeEventListener('pointercancel', finish)
+      showToast(t('player.parallax', { value: `${Math.round(parallaxRef.current * 1000) / 10}%` }))
+    }
+    canvas.addEventListener('pointermove', move)
+    canvas.addEventListener('pointerup', finish)
+    canvas.addEventListener('pointercancel', finish)
+  }
+  const onStereoDblClick = () => {
+    if (stereoRef.current.projection === 'sphere') {
+      cameraRef.current = { yaw: 0, pitch: 0, fov: 90 }
+      pushCamera()
+      showToast(t('player.cameraReset'))
+      return
+    }
+    parallaxRef.current = 0
+    anaglyphRendererRef.current?.setMode({ projection: 'flat', layout: stereoRef.current.layout === 'tb' ? 'tb' : 'sbs', parallax: 0 })
+    anaglyphRendererRef.current?.render()
+    showToast(t('player.parallaxReset'))
+  }
+  const onStereoWheel = (event: WheelEvent) => {
+    if (stereoRef.current.projection !== 'sphere') return
+    event.preventDefault()
+    cameraRef.current = clampCamera({ ...cameraRef.current, fov: cameraRef.current.fov * (event.deltaY > 0 ? 1.1 : 1 / 1.1) })
+    pushCamera()
+  }
+  // 画布监听只注册一次，但经 ref 委托到最新 handler：热更新/重渲染后拖拽始终走当前代码
+  const stereoPointerDownRef = useRef(onStereoPointerDown); stereoPointerDownRef.current = onStereoPointerDown
+  const stereoDblClickRef = useRef(onStereoDblClick); stereoDblClickRef.current = onStereoDblClick
+  const stereoWheelRef = useRef(onStereoWheel); stereoWheelRef.current = onStereoWheel
+
+  const startStereoGl = (video: HTMLVideoElement, mode: StereoMode) => {
+    const parent = video.parentNode
+    if (!parent) return
+    // 兼容播放换源后 <video> 节点被替换：画布要跟着重挂
+    if (anaglyphCanvasRef.current && anaglyphCanvasRef.current.parentNode !== parent) stopStereoGl()
+    let canvas = anaglyphCanvasRef.current
+    if (!canvas) {
+      canvas = document.createElement('canvas')
+      canvas.className = mode.projection === 'sphere' ? 'anaglyph-canvas sphere-canvas' : 'anaglyph-canvas'
+      canvas.addEventListener('pointerdown', (event) => stereoPointerDownRef.current(event))
+      canvas.addEventListener('dblclick', () => stereoDblClickRef.current())
+      canvas.addEventListener('wheel', (event) => stereoWheelRef.current(event), { passive: false })
+      video.after(canvas)
+      anaglyphCanvasRef.current = canvas
+      try {
+        anaglyphRendererRef.current = new StereoGLRenderer(canvas)
+        // 上下文丢失/首帧绘制出错：摘掉画布回退原画面并提示，避免黑屏盖住视频
+        anaglyphRendererRef.current.onFailure = () => { stopStereoGl(); showToast(t('player.anaglyphUnsupported')) }
+      } catch {
+        stopStereoGl()
+        showToast(t('player.anaglyphUnsupported'))
+        return
+      }
+    }
+    // 投影切换不重挂画布，只更新类名（光标语义随拖拽行为变化）
+    canvas.className = mode.projection === 'sphere' ? 'anaglyph-canvas sphere-canvas' : 'anaglyph-canvas'
+    anaglyphRendererRef.current?.setMode({
+      projection: mode.projection,
+      layout: mode.layout === 'tb' ? 'tb' : 'sbs',
+      output: mode.output,
+      parallax: parallaxRef.current,
+      camera: cameraRef.current
+    })
+    anaglyphRendererRef.current?.start(video)
+    // 暂停状态下切模式也要立刻出画面（rVFC 要等下一帧才触发）
+    anaglyphRendererRef.current?.render()
+  }
+
+  const applyStereo = () => {
+    const player = playerRef.current
+    const video = videoElement()
+    if (!player || player.isDisposed() || !video || !video.videoWidth) return
+    const style = video.style as CSSStyleDeclaration & { objectViewBox: string }
+    const mode = stereoRef.current
+    const display = mode.layout === 'off' ? null : stereoDisplay(mode, video.videoWidth, video.videoHeight)
+    // 播放器盒子固定为容器大小（fill 模式），画幅由 3D 渲染器/裁剪自行控制：
+    // 非 3D 播放视频内容 contain 加黑边（不再随容器拉伸变形）；3D 模式保持 fill，
+    // 挤压封装的单眼裁剪依赖它拉伸回整帧比例
+    video.style.objectFit = display ? 'fill' : 'contain'
+    if (!display) {
+      stopStereoGl()
+      style.objectViewBox = ''
+      return
+    }
+    if (display.kind === 'crop') {
+      stopStereoGl()
+      style.objectViewBox = display.viewBox
+      return
+    }
+    style.objectViewBox = ''
+    startStereoGl(video, mode)
+  }
+  const applyStereoRef = useRef(applyStereo)
+  applyStereoRef.current = applyStereo
+  useEffect(() => { applyStereoRef.current() }, [stereo, playerReady])
+
   const stamp = () => {
     const now = new Date()
     const pad = (value: number) => String(value).padStart(2, '0')
@@ -223,9 +446,13 @@ const Player: React.FC<PlayerProps> = ({ infoHash, file, subtitles, playlist, on
     if (!video || !video.videoWidth) { showToast(t('player.noFrame')); return }
     try {
       const canvas = document.createElement('canvas')
-      canvas.width = video.videoWidth
-      canvas.height = video.videoHeight
-      canvas.getContext('2d')?.drawImage(video, 0, 0)
+      // 3D 视角开启时，截图只取当前单眼画面
+      const crop = stereoCropRect(stereoRef.current, video.videoWidth, video.videoHeight)
+      canvas.width = crop ? crop.width : video.videoWidth
+      canvas.height = crop ? crop.height : video.videoHeight
+      const context = canvas.getContext('2d')
+      if (crop) context?.drawImage(video, crop.left, crop.top, crop.width, crop.height, 0, 0, crop.width, crop.height)
+      else context?.drawImage(video, 0, 0)
       const result = await ipc.saveMediaFile(`${file.name.replace(/\.[^.]+$/, '')}_${stamp()}.png`, canvas.toDataURL('image/png'))
       showToast(result.success ? t('player.snapshotSaved', { path: result.data ?? '' }) : result.canceled ? null : result.error || t('player.snapshotFailed'))
     } catch { showToast(t('player.snapshotNotReady')) }
@@ -275,6 +502,18 @@ const Player: React.FC<PlayerProps> = ({ infoHash, file, subtitles, playlist, on
     if (recording) { button.addClass('vjs-btv-recording'); button.controlText(t('player.recordStop')) } else { button.removeClass('vjs-btv-recording'); button.controlText(t('player.recordStart')) }
   }, [recording, playerReady])
 
+  // 3D 菜单状态同步：当前模式在菜单里打勾，开启（非关闭）时按钮点亮
+  useEffect(() => {
+    stereoItemsRef.current.forEach((item, index) => {
+      const mode = STEREO_MENU[index]
+      if (mode) { try { item.selected(stereoEqual(mode, stereo)) } catch { /* 组件已销毁 */ } }
+    })
+    const button = stereoMenuRef.current
+    if (!button) return
+    if (stereo.layout === 'off') button.removeClass('vjs-btv-stereo-on')
+    else button.addClass('vjs-btv-stereo-on')
+  }, [stereo, playerReady])
+
   useEffect(() => {
     let active = true
     const controller = new AbortController()
@@ -312,8 +551,10 @@ const Player: React.FC<PlayerProps> = ({ infoHash, file, subtitles, playlist, on
       element.setAttribute('crossorigin', 'anonymous')
       containerRef.current.replaceChildren(element)
       const source = { src: streamUrl, type: getMime(file.name) }
-      // playbackRates 会让 video.js 在控制条自动挂上倍速菜单按钮
-      const player = videojs(element, { controls: true, autoplay: false, preload: 'auto', fluid: true, responsive: true, language: 'zh-CN', playbackRates: [0.5, 0.75, 1, 1.25, 1.5, 2], sources: [source] })
+      // playbackRates 会让 video.js 在控制条自动挂上倍速菜单按钮；
+      // fill（而非 fluid）：播放器盒子固定为容器大小，fluid 会按片源宽高比注入 padding-top
+      // 把控制条顶出可视区（3D 全景 1:1 / 竖幅片源必现）
+      const player = videojs(element, { controls: true, autoplay: false, preload: 'auto', fill: true, responsive: true, language: 'zh-CN', playbackRates: [0.5, 0.75, 1, 1.25, 1.5, 2], sources: [source] })
       playerRef.current = player
       let lastVolumeSave = 0
       // 音量/倍速变化时持久化（拖动音量条会密集触发，做节流）
@@ -348,6 +589,29 @@ const Player: React.FC<PlayerProps> = ({ infoHash, file, subtitles, playlist, on
         recordButton.addClass('vjs-btv-record')
         recordButtonRef.current = recordButton
         addBeforeFullscreen(recordButton)
+        // 3D 视角菜单：点开直接选择模式（关 / 平面左右 / 平面上下 / 球面 VR180 各输出），不再逐次循环
+        const VjsMenuButton = videojs.getComponent('MenuButton') as unknown as (new (player: VjsPlayer, options?: { title?: string; controlText?: string }) => VjsMenuButtonLike) | undefined
+        const VjsMenuItem = videojs.getComponent('MenuItem') as unknown as (new (player: VjsPlayer, options?: { label?: string; selectable?: boolean; selected?: boolean }) => VjsMenuItemLike) | undefined
+        if (VjsMenuButton && VjsMenuItem) {
+          const items: VjsMenuItemLike[] = []
+          const makeItem = (mode: StereoMode) => {
+            const item = new VjsMenuItem(player, { label: stereoModeLabel(mode), selectable: true, selected: stereoEqual(mode, stereoRef.current) })
+            item.on('click', () => stereoSelectRef.current(mode))
+            items.push(item)
+            return item
+          }
+          class BtvStereoMenuButton extends VjsMenuButton {
+            createItems() {
+              for (const mode of STEREO_MENU) makeItem(mode)
+              return items
+            }
+          }
+          const stereoMenu = new BtvStereoMenuButton(player, { title: t('player.stereoSection'), controlText: t('player.stereoSection') })
+          stereoMenu.addClass('vjs-btv-stereo')
+          stereoMenuRef.current = stereoMenu
+          stereoItemsRef.current = items
+          addBeforeFullscreen(stereoMenu)
+        }
         // 画中画：浏览器不支持时按钮不出现
         if (document.pictureInPictureEnabled) {
           const pipButton = new BtvControlButton(player, { onClick: () => void togglePictureInPicture() })
@@ -416,6 +680,8 @@ const Player: React.FC<PlayerProps> = ({ infoHash, file, subtitles, playlist, on
           }
         })()
       })
+      // 3D 视角：元数据就绪后应用裁剪与画幅（兼容播放换源后会再次触发）
+      player.on('loadedmetadata', () => { if (active) applyStereoRef.current() })
       // 播完自动连播：切到播放列表中的下一个媒体（新文件未就绪时由探测重试逻辑接管）
       player.on('ended', () => {
         if (!active || !autoPlayRef.current) return
@@ -429,7 +695,8 @@ const Player: React.FC<PlayerProps> = ({ infoHash, file, subtitles, playlist, on
 
     const init = async () => {
       try {
-        const streamUrl = await ipc.getStreamUrl(infoHash, file.path)
+        // 本地媒体走 /local 注册路由；下载任务走 /stream（同一套 token 与 Range 行为）
+        const streamUrl = file.localPath ? await ipc.getLocalMediaUrl(file.localPath) : await ipc.getStreamUrl(infoHash, file.path)
         if (!active) return
         // 起播优先：先让引擎优先下载文件头尾（MP4 的 moov 可能在尾部），再等数据就绪
         prioritizeStream(0, 0)
@@ -462,10 +729,16 @@ const Player: React.FC<PlayerProps> = ({ infoHash, file, subtitles, playlist, on
       setRecording(false)
       if (recordSessionRef.current) { void ipc.recordAbort(recordSessionRef.current).catch(() => undefined); recordSessionRef.current = null }
       recordButtonRef.current = null
+      stereoMenuRef.current = null
+      stereoItemsRef.current = []
+      // 合并渲染的画布随旧 .video-js 一起被移除，这里释放 WebGL 资源
+      anaglyphRendererRef.current?.dispose()
+      anaglyphRendererRef.current = null
+      anaglyphCanvasRef.current = null
       playerRef.current?.dispose()
       playerRef.current = null
     }
-  }, [infoHash, file.path, file.name])
+  }, [infoHash, file.path, file.name, file.localPath, file.type])
 
   // 兼容播放：转码完成后把播放器源换成 /compat/<id>（同一套 Range 流服务，可拖动）
   const loadCompatSource = useCallback(async (id: string) => {
@@ -682,6 +955,25 @@ const Player: React.FC<PlayerProps> = ({ infoHash, file, subtitles, playlist, on
           <span className="subtitle-track-name">{trackLabel(track, index)}</span>
         </button>
       ))}
+    </div>}
+  </div>
+  <div className="extras-section">
+    <div className="extras-title">{t('player.stereoSection')}</div>
+    <div className="subtitle-actions">
+      {(['off', 'sbs', 'tb'] as StereoLayout[]).map((layout) => (
+        <button key={layout} className={`small-button stereo-choice ${stereo.layout === layout ? 'is-active' : ''}`} onClick={() => changeStereo({ ...stereo, layout })}>{t(layout === 'off' ? 'player.stereoOff' : layout === 'sbs' ? 'player.stereoSbs' : 'player.stereoTb')}</button>
+      ))}
+    </div>
+    {stereo.layout !== 'off' && <div className="subtitle-actions">
+      {(['anaglyph', 'left', 'right', 'dual'] as StereoOutput[]).map((output) => (
+        <button key={output} className={`small-button stereo-choice ${stereo.output === output ? 'is-active' : ''}`} onClick={() => changeStereo({ ...stereo, output })}>{t(output === 'anaglyph' ? 'player.stereoAnaglyph' : output === 'dual' ? 'player.stereoDual' : output === 'left' ? 'player.stereoLeftEye' : 'player.stereoRightEye')}</button>
+      ))}
+    </div>}
+    {stereo.layout !== 'off' && <div className="subtitle-actions">
+      {(['flat', 'sphere'] as StereoProjection[]).map((projection) => (
+        <button key={projection} className={`small-button stereo-choice ${stereo.projection === projection ? 'is-active' : ''}`} onClick={() => changeStereo({ ...stereo, projection })}>{t(projection === 'sphere' ? 'player.stereoSphere' : 'player.stereoFlat')}</button>
+      ))}
+      <span className="subtitle-hint">{t('player.stereoHint')}</span>
     </div>}
   </div>
   <div className="extras-section">

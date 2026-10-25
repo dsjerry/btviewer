@@ -1,14 +1,15 @@
 import { app, BrowserWindow, ipcMain, dialog, Menu, shell, nativeTheme, Tray, Notification, clipboard } from 'electron'
-import { join, resolve } from 'path'
+import { basename, join, resolve } from 'path'
 import { spawn } from 'child_process'
-import { createWriteStream, existsSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { createWriteStream, existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
 import { randomUUID } from 'crypto'
 import { torrentEngine } from './torrent-engine'
 import { getProgress, setProgress } from './progress-store'
 import { getThumbnails, saveThumbnail } from './thumbnail-store'
 import { loadSettings, saveSettings } from './settings'
 import { addFeed, checkAllFeeds, checkFeed, downloadFeedItem, getFeeds, removeFeed, startPolling, updateFeed } from './rss'
-import { isUnderRoot, resolveAria2Binary } from './torrent-engine'
+import { getFileType, isUnderRoot, resolveAria2Binary } from './torrent-engine'
+import { addLocalMediaEntries, listLocalMedia, removeLocalMedia } from './local-media'
 import { collectLaunchInputs } from './launch-inputs'
 import { planPostAction } from './post-action'
 import { createClipboardWatcher } from './clipboard-watch'
@@ -18,7 +19,7 @@ import { downloadYtDlp, downloadFfmpeg, downloadDeno, updateYtDlp, seedBundledMe
 import { logger, listLogFiles, readLogTail } from './logger'
 import { buildDiagnostics } from './diagnostics'
 import { isNewerVersion, parseLatestRelease } from './update-check'
-import type { AppSettings, GlobalStat, TorrentStatus } from '../src/types'
+import type { AppSettings, GlobalStat, LocalMediaEntry, TorrentStatus } from '../src/types'
 
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
@@ -37,6 +38,15 @@ if (!hasSingleInstanceLock && !isDiagnosticsRun) {
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+// 本地媒体路径 → 媒体库引用条目（对话框导入与拖放导入共用一套过滤；只收视频/音频）
+const toLocalMediaEntry = (path: string): LocalMediaEntry | null => {
+  let size: number
+  try { size = statSync(path).size } catch { return null }
+  const type = getFileType(path)
+  if ((type !== 'video' && type !== 'audio') || !size) return null
+  return { name: basename(path), path, size, type, addedAt: Date.now() }
 }
 
 // 原生控件（对话框、菜单）跟随设置的主题；非法值回退为跟随系统
@@ -362,6 +372,8 @@ async function createWindow() {
     if (isDev) {
       // electron-vite 注入的 dev server 地址，避免多实例时连到别的实例
       await mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL || 'http://localhost:5173')
+      // 开发模式自动挂出 DevTools（打包版不受影响）
+      mainWindow.webContents.openDevTools({ mode: 'detach' })
     } else {
       await mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
     }
@@ -826,6 +838,62 @@ function setupIPC() {
     } catch (error) {
       return { success: false, error: getErrorMessage(error) }
     }
+  })
+
+  // 导入本地视频进媒体库（引用文件路径，不复制）：对话框多选 → 登记持久化 → 返回完整列表
+  ipcMain.handle('local:pick', async () => {
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      return { success: false, error: '窗口尚未准备好' }
+    }
+    const result = await dialog.showOpenDialog(mainWindow, {
+      properties: ['openFile', 'multiSelections'],
+      filters: [
+        { name: 'Media Files', extensions: ['mp4', 'm4v', 'mov', 'webm', 'mkv', 'avi', 'wmv', 'flv', 'ts', 'rmvb', 'mp3', 'flac', 'wav', 'aac', 'ogg', 'm4a', 'wma'] },
+        { name: 'All Files', extensions: ['*'] }
+      ]
+    })
+    if (result.canceled || result.filePaths.length === 0) {
+      return { success: false, canceled: true }
+    }
+    try {
+      const entries = result.filePaths.map(toLocalMediaEntry).filter((entry): entry is LocalMediaEntry => !!entry)
+      if (!entries.length) return { success: false, error: '所选文件中没有可播放的媒体' }
+      return { success: true, data: addLocalMediaEntries(entries) }
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) }
+    }
+  })
+
+  // 拖放的本地媒体路径：登记进媒体库并返回完整列表（按路径去重）
+  ipcMain.handle('local:add-paths', (_event, paths: string[]) => {
+    try {
+      const seen = new Set<string>()
+      const entries = (Array.isArray(paths) ? paths : [])
+        .map(toLocalMediaEntry)
+        .filter((entry): entry is LocalMediaEntry => !!entry && !seen.has(entry.path) && !!seen.add(entry.path))
+      if (!entries.length) return { success: false, error: '所选文件中没有可播放的媒体' }
+      return { success: true, data: addLocalMediaEntries(entries) }
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) }
+    }
+  })
+
+  // 媒体库的本地视频引用列表（missing 现查，供「文件不存在」态展示）
+  ipcMain.handle('local:list', () => ({ success: true, data: listLocalMedia() }))
+
+  // 移除引用（只删记录，不动磁盘文件）
+  ipcMain.handle('local:remove', (_event, path: string) => {
+    return { success: true, data: removeLocalMedia(String(path)) }
+  })
+
+  // 本地媒体流地址：登记进流服务注册表，返回带 token 的 /local/<id> 地址（与 /stream 同一套鉴权与 Range）
+  ipcMain.handle('local:media-url', (_event, localPath: string) => {
+    return torrentEngine.getLocalMediaUrl(String(localPath))
+  })
+
+  // 本地视频的同目录字幕（srt/vtt），渲染层按匹配度挂载
+  ipcMain.handle('local:subtitles', (_event, videoPath: string) => {
+    return { success: true, data: torrentEngine.getLocalSubtitles(String(videoPath)) }
   })
 
   ipcMain.handle('dialog:pick-download-dir', async () => {

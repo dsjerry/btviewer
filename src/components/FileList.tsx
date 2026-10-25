@@ -1,10 +1,11 @@
 import { sameTorrentFile } from '../services/torrent-diff'
 import React, { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { ipc } from '../services/ipc'
-import { formatSize, statusLabel, taskType, typeLabel, watchLabel, watchPercent } from '../services/task-meta'
+import { formatSize, localEntryToFile, statusLabel, taskType, typeLabel, watchLabel, watchPercent } from '../services/task-meta'
 import { episodeLabel, parseEpisode, type EpisodeTag } from '../services/episode'
 import { t } from '../services/i18n'
-import type { TorrentFileInfo, TorrentStatus, WatchProgress } from '../types'
+import type { LocalMediaEntry, TorrentFileInfo, TorrentStatus, WatchProgress } from '../types'
+import { LOCAL_MEDIA_HASH } from '../types'
 import getThumbnail from '../services/thumbnail'
 interface FileListProps {
   torrent: TorrentStatus | null
@@ -15,6 +16,12 @@ interface FileListProps {
   onResumeTorrent: (torrent: TorrentStatus, file: TorrentFileInfo) => void
   onRemove: (torrent: TorrentStatus, destroy: boolean) => void
   onBack: () => void
+  // 本地视频引用（媒体库一等公民）：导入/点播/移除由 App 统一处理
+  localLibrary: LocalMediaEntry[]
+  onImportLocal: () => void
+  onPlayLocalFile: (entry: LocalMediaEntry) => void
+  onRemoveLocal: (entry: LocalMediaEntry) => void
+  onRefreshLocal: () => void
 }
 type SortKey = 'added' | 'name' | 'size' | 'watched'
 type FilterKey = 'all' | 'video' | 'audio' | 'unfinished'
@@ -64,6 +71,61 @@ const WatchBadge: React.FC<{ watch?: WatchProgress | null }> = ({ watch }) => {
   return <span className={`watch-label ${percent > 0 ? 'is-watched' : ''}`}>{watchLabel(watch)}</span>
 }
 
+// 库条目容器（媒体库网格视图共用）：任务卡片与本地视频引用只是数据与交互不同，结构完全同构。
+// 差异全部通过 props 注入（缩略图、标签、点击行为、移除确认），避免两份拷贝各自演化产生不一致。
+interface LibraryTileProps {
+  thumb: React.ReactNode
+  title: string
+  tags: React.ReactNode
+  progress: number
+  meta: React.ReactNode
+  onClick: () => void
+  onRemove: () => void
+  removeTitle: string
+  isLocal?: boolean
+  missing?: boolean
+}
+const LibraryTile: React.FC<LibraryTileProps> = ({ thumb, title, tags, progress, meta, onClick, onRemove, removeTitle, isLocal, missing }) => (
+  <div className={`torrent-tile ${isLocal ? 'local-tile' : ''} ${missing ? 'is-missing' : ''}`} onClick={onClick} role="button" tabIndex={0}>
+    <button className="tile-remove" title={removeTitle} onClick={(event) => { event.stopPropagation(); onRemove() }}>×</button>
+    <div className="tile-poster">
+      {thumb}
+      <span className="tile-scrim" aria-hidden="true" />
+      <span className="tile-play" aria-hidden="true">▶</span>
+    </div>
+    <strong title={title}>{title}</strong>
+    <div className="tile-tags">{tags}</div>
+    <div className="tile-progress"><span style={{ width: `${progress}%` }} /></div>
+    <small>{meta}</small>
+  </div>
+)
+
+// 库条目容器（媒体库列表视图共用），与 LibraryTile 成对
+interface LibraryRowProps {
+  thumb: React.ReactNode
+  title: string
+  sub: React.ReactNode
+  progress: number
+  trailing?: React.ReactNode
+  onClick: () => void
+  onRemove: () => void
+  removeTitle: string
+  isLocal?: boolean
+  missing?: boolean
+}
+const LibraryRow: React.FC<LibraryRowProps> = ({ thumb, title, sub, progress, trailing, onClick, onRemove, removeTitle, isLocal, missing }) => (
+  <div className={`library-row ${isLocal ? 'local-row' : ''} ${missing ? 'is-missing' : ''}`} onClick={onClick} role="button" tabIndex={0}>
+    {thumb}
+    <div className="row-main">
+      <strong title={title}>{title}</strong>
+      <span className="row-sub">{sub}</span>
+    </div>
+    {trailing}
+    <span className="row-progress"><span className="bar"><span style={{ width: `${progress}%` }} /></span>{progress > 0 && <small>{progress}%</small>}</span>
+    <button className="tile-remove" title={removeTitle} onClick={(event) => { event.stopPropagation(); onRemove() }}>×</button>
+  </div>
+)
+
 interface FileRowProps { infoHash: string; file: TorrentFileInfo; onPlayFile: (file: TorrentFileInfo) => void }
 // 文件行 memo：状态每秒刷新会重建 files 数组，内容相同的行直接跳过重渲染
 const FileRow = memo<FileRowProps>(({ infoHash, file, onPlayFile }) => {
@@ -71,9 +133,11 @@ const FileRow = memo<FileRowProps>(({ infoHash, file, onPlayFile }) => {
   return <div className="file-item"><div className="file-name">{parseEpisode(file.name) && <span className="file-episode" title="识别到的季集">{episodeLabel(parseEpisode(file.name))}</span>}{file.type === 'video' ? <VideoThumb infoHash={infoHash} file={file} className="file-icon video" fallback="▶" /> : <span className={`file-icon ${file.type}`}>{icons[file.type]}</span>}<strong title={file.name}>{file.name}</strong></div><span className="file-progress"><span className="bar"><span style={{ width: `${percent}%` }} /></span><small>{percent}%</small></span><span className="file-type">{fileTypeLabel(file.type)}</span><span className="file-size">{formatSize(file.size)}</span>{file.type === 'video' || file.type === 'audio' ? <button className="play-button" onClick={() => onPlayFile(file)}>播放 <span>↗</span></button> : <span />}</div>
 }, (a, b) => a.infoHash === b.infoHash && a.onPlayFile === b.onPlayFile && sameTorrentFile(a.file, b.file))
 
-const FileList: React.FC<FileListProps> = ({ torrent, torrents, onSelectTorrent, onPlayFile, onResumeTorrent, onRemove, onBack }) => {
+const FileList: React.FC<FileListProps> = ({ torrent, torrents, onSelectTorrent, onPlayFile, onResumeTorrent, onRemove, onBack, localLibrary, onImportLocal, onPlayLocalFile, onRemoveLocal, onRefreshLocal }) => {
   const [query, setQuery] = useState('')
   const [copied, setCopied] = useState(false)
+  // 本地引用的 missing 状态要现查（移动硬盘可能已挂载/拔出）：挂载时刷一次
+  useEffect(() => { onRefreshLocal() }, [onRefreshLocal])
   // 媒体库视图：卡片网格 / 紧凑列表，偏好持久化
   const [view, setView] = useState<'grid' | 'list'>(() => (localStorage.getItem('btviewer-library-view') === 'list' ? 'list' : 'grid'))
   const changeView = (mode: 'grid' | 'list') => { setView(mode); localStorage.setItem('btviewer-library-view', mode) }
@@ -106,9 +170,70 @@ const FileList: React.FC<FileListProps> = ({ torrent, torrents, onSelectTorrent,
     return () => { active = false }
   }, [watchKey])
 
+  // 本地视频引用的观看进度：与任务进度同一存储（键为 local-media:路径），库页据此展示「看到哪」
+  const [localWatchMap, setLocalWatchMap] = useState<Record<string, WatchProgress | null>>({})
+  const localWatchKey = useMemo(() => localLibrary.map((entry) => entry.path).join('|'), [localLibrary])
+  useEffect(() => {
+    let active = true
+    void (async () => {
+      const entries = await Promise.all(localLibrary.map(async (entry) => {
+        try { return [entry.path, await ipc.getProgress(LOCAL_MEDIA_HASH, entry.path)] as const } catch { return [entry.path, null] as const }
+      }))
+      if (active) setLocalWatchMap(Object.fromEntries(entries))
+    })()
+    return () => { active = false }
+  }, [localWatchKey, localLibrary])
+
   // 库列表：网格 / 紧凑列表共用同一份数据与移除确认逻辑
   const confirmRemove = (item: TorrentStatus) => { if (window.confirm(t('library.removeConfirm', { name: item.name }))) onRemove(item, false) }
-  const removeButton = (item: TorrentStatus) => <button className="tile-remove" title={t('downloads.remove')} onClick={(event) => { event.stopPropagation(); confirmRemove(item) }}>×</button>
+  const localSection = localLibrary.length > 0 && (
+    <div className="local-library">
+      <div className="library-section-head"><span>{t('library.localSection')}</span><small>{localLibrary.length}</small></div>
+      {view === 'grid' ? (
+        <div className="torrent-grid">
+          {localLibrary.map((entry) => {
+            const watch = localWatchMap[entry.path]
+            return (
+              <LibraryTile
+                key={entry.path}
+                isLocal
+                missing={entry.missing}
+                thumb={<VideoThumb infoHash={LOCAL_MEDIA_HASH} file={localEntryToFile(entry)} className="tile-icon" fallback={entry.type === 'audio' ? '♫' : '▶'} />}
+                title={entry.name}
+                tags={<><span className="task-type">{t('library.localTag')}</span>{entry.missing && <span className="task-error">{t('library.localMissing')}</span>}<WatchBadge watch={watch} /></>}
+                progress={watchPercent(watch)}
+                meta={<span title={entry.path}>{formatSize(entry.size)}</span>}
+                onClick={() => { if (!entry.missing) onPlayLocalFile(entry) }}
+                onRemove={() => onRemoveLocal(entry)}
+                removeTitle={t('library.removeRecord')}
+              />
+            )
+          })}
+        </div>
+      ) : (
+        <div className="library-list">
+          {localLibrary.map((entry) => {
+            const watch = localWatchMap[entry.path]
+            return (
+              <LibraryRow
+                key={entry.path}
+                isLocal
+                missing={entry.missing}
+                thumb={<VideoThumb infoHash={LOCAL_MEDIA_HASH} file={localEntryToFile(entry)} className="row-icon" fallback={entry.type === 'audio' ? '♫' : '▶'} />}
+                title={entry.name}
+                sub={<>{t('library.localTag')} · {formatSize(entry.size)}{entry.missing ? ` · ${t('library.localMissing')}` : ''}</>}
+                progress={watchPercent(watch)}
+                trailing={<WatchBadge watch={watch} />}
+                onClick={() => { if (!entry.missing) onPlayLocalFile(entry) }}
+                onRemove={() => onRemoveLocal(entry)}
+                removeTitle={t('library.removeRecord')}
+              />
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
   const metaLine = (item: TorrentStatus) => `${typeLabel(taskType(item))} · ${t('library.fileCount', { count: item.files.length })} · ${formatSize(item.totalSize)}${downloadHint(item)}`
   // 剧集概览（B4）：能识别出 2 集以上时给一个「S01 · 12 集」，跨季则显示区间
   const episodeSummary = (item: TorrentStatus) => {
@@ -138,12 +263,27 @@ const FileList: React.FC<FileListProps> = ({ torrent, torrents, onSelectTorrent,
     return sorted
   }, [torrents, keyword, filter, sort, watchMap])
 
-  // 继续观看：看过但没看完的任务，按最近观看时间排序
-  const resumable = useMemo(() => torrents
-    .map((item) => ({ item, watch: watchMap[item.infoHash], file: playableFile(item) }))
-    .filter((entry) => { const percent = watchPercent(entry.watch); return percent > 0 && percent < 95 && !!entry.file })
-    .sort((a, b) => (b.watch?.updatedAt || 0) - (a.watch?.updatedAt || 0))
-    .slice(0, 8), [torrents, watchMap])
+  // 继续观看：看过但没看完的任务与本地视频合并，按最近观看时间排序
+  type ResumeCard = { key: string; name: string; watch: WatchProgress | null; thumb: React.ReactNode; resume: () => void }
+  const resumeCards = useMemo<ResumeCard[]>(() => {
+    const cards: ResumeCard[] = []
+    for (const item of torrents) {
+      const watch = watchMap[item.infoHash]
+      const file = playableFile(item)
+      const percent = watchPercent(watch)
+      if (percent > 0 && percent < 95 && file) {
+        cards.push({ key: item.infoHash, name: item.name, watch, thumb: <VideoThumb infoHash={item.infoHash} file={file} className="resume-thumb" fallback={placeholderIcon(item)} />, resume: () => onResumeTorrent(item, file) })
+      }
+    }
+    for (const entry of localLibrary) {
+      const watch = localWatchMap[entry.path]
+      const percent = watchPercent(watch)
+      if (percent > 0 && percent < 95 && !entry.missing) {
+        cards.push({ key: entry.path, name: entry.name, watch, thumb: <VideoThumb infoHash={LOCAL_MEDIA_HASH} file={localEntryToFile(entry)} className="resume-thumb" fallback={entry.type === 'audio' ? '♫' : '▶'} />, resume: () => onPlayLocalFile(entry) })
+      }
+    }
+    return cards.sort((a, b) => (b.watch?.updatedAt || 0) - (a.watch?.updatedAt || 0)).slice(0, 8)
+  }, [torrents, watchMap, localLibrary, localWatchMap, onResumeTorrent, onPlayLocalFile])
 
   if (!torrent) {
     return (
@@ -151,6 +291,14 @@ const FileList: React.FC<FileListProps> = ({ torrent, torrents, onSelectTorrent,
         <div className="page-heading">
           <div><span className="eyebrow">{t('library.eyebrow')}</span><h2>{t('library.title')}</h2><p>{t('library.subtitle')}</p></div>
           <div className="heading-side">
+            <button className="small-button library-import" onClick={onImportLocal}>
+              <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <rect x="2.75" y="4.75" width="10.5" height="10.5" rx="2" />
+                <path d="M6.5 7.75L10.25 10L6.5 12.25Z" fill="currentColor" stroke="none" />
+                <path d="M16.25 7.25v5.5M13.5 10h5.5" />
+              </svg>
+              <span>{t('library.importLocal')}</span>
+            </button>
             {!!torrents.length && <span className="heading-count">{torrents.length.toString().padStart(2, '0')}</span>}
             <div className="view-toggle" role="tablist">
               <button role="tab" aria-selected={view === 'grid'} className={view === 'grid' ? 'is-active' : ''} onClick={() => changeView('grid')} title={t('library.gridView')}>⊞</button>
@@ -158,16 +306,16 @@ const FileList: React.FC<FileListProps> = ({ torrent, torrents, onSelectTorrent,
             </div>
           </div>
         </div>
-        {resumable.length > 0 && (
+        {resumeCards.length > 0 && (
           <div className="resume-strip">
             <div className="resume-strip-head"><span>{t('library.continue')}</span><small>{t('library.continueHint')}</small></div>
             <div className="resume-strip-list">
-              {resumable.map(({ item, watch, file }) => (
-                <button className="resume-card" key={item.infoHash} onClick={() => onResumeTorrent(item, file!)} title={`${t('library.play')}「${item.name}」`}>
-                  <VideoThumb infoHash={item.infoHash} file={file} className="resume-thumb" fallback={placeholderIcon(item)} />
-                  <span className="resume-name">{item.name}</span>
-                  <span className="resume-progress"><span style={{ width: `${watchPercent(watch)}%` }} /></span>
-                  <small>{watchLabel(watch)}</small>
+              {resumeCards.map((card) => (
+                <button className="resume-card" key={card.key} onClick={card.resume} title={`${t('library.play')}「${card.name}」`}>
+                  {card.thumb}
+                  <span className="resume-name">{card.name}</span>
+                  <span className="resume-progress"><span style={{ width: `${watchPercent(card.watch)}%` }} /></span>
+                  <small>{watchLabel(card.watch)}</small>
                 </button>
               ))}
             </div>
@@ -187,47 +335,46 @@ const FileList: React.FC<FileListProps> = ({ torrent, torrents, onSelectTorrent,
             </div>
           </div>
         )}
-        {!torrents.length
+        {!torrents.length && !localLibrary.length
           ? <div className="empty-state"><span>▣</span><strong>{t('library.empty')}</strong><p>{t('library.emptyHint')}</p></div>
-          : !visible.length
+          : !torrents.length
+            ? null
+            : !visible.length
             ? <div className="empty-state"><span>⌕</span><strong>{t('library.noMatch')}</strong><p>{t('library.noMatchHint')}</p></div>
             : view === 'grid'
             ? <div className="torrent-grid">{visible.map((item) => {
               const watch = watchMap[item.infoHash]
               return (
-                <div className="torrent-tile" key={item.infoHash} onClick={() => onSelectTorrent(item)} role="button" tabIndex={0}>
-                  {removeButton(item)}
-                  <div className="tile-poster">
-                    <VideoThumb infoHash={item.infoHash} file={playableFile(item)} className="tile-icon" fallback={placeholderIcon(item)} />
-                    <span className="tile-scrim" aria-hidden="true" />
-                    <span className="tile-play" aria-hidden="true">▶</span>
-                  </div>
-                  <strong title={item.name}>{item.name}</strong>
-                  <div className="tile-tags">
-                    <span className="task-type">{typeLabel(taskType(item))}</span>
-                    {episodeSummary(item) && <span className="episode-tag">{episodeSummary(item)}</span>}
-                    <WatchBadge watch={watch} />
-                  </div>
-                  <div className="tile-progress"><span style={{ width: `${watchPercent(watch)}%` }} /></div>
-                  <small>{metaLine(item)}</small>
-                </div>
+                <LibraryTile
+                  key={item.infoHash}
+                  thumb={<VideoThumb infoHash={item.infoHash} file={playableFile(item)} className="tile-icon" fallback={placeholderIcon(item)} />}
+                  title={item.name}
+                  tags={<><span className="task-type">{typeLabel(taskType(item))}</span>{episodeSummary(item) && <span className="episode-tag">{episodeSummary(item)}</span>}<WatchBadge watch={watch} /></>}
+                  progress={watchPercent(watch)}
+                  meta={metaLine(item)}
+                  onClick={() => onSelectTorrent(item)}
+                  onRemove={() => confirmRemove(item)}
+                  removeTitle={t('downloads.remove')}
+                />
               )
             })}</div>
             : <div className="library-list">{visible.map((item) => {
               const watch = watchMap[item.infoHash]
               return (
-                <div className="library-row" key={item.infoHash} onClick={() => onSelectTorrent(item)} role="button" tabIndex={0}>
-                  <VideoThumb infoHash={item.infoHash} file={playableFile(item)} className="row-icon" fallback={placeholderIcon(item)} />
-                  <div className="row-main">
-                    <strong title={item.name}>{item.name}</strong>
-                    <span className="row-sub">{metaLine(item)}{episodeSummary(item) ? ` · ${episodeSummary(item)}` : ''}</span>
-                  </div>
-                  <WatchBadge watch={watch} />
-                  <span className="row-progress"><span className="bar"><span style={{ width: `${watchPercent(watch)}%` }} /></span>{watchPercent(watch) > 0 && <small>{watchPercent(watch)}%</small>}</span>
-                  {removeButton(item)}
-                </div>
+                <LibraryRow
+                  key={item.infoHash}
+                  thumb={<VideoThumb infoHash={item.infoHash} file={playableFile(item)} className="row-icon" fallback={placeholderIcon(item)} />}
+                  title={item.name}
+                  sub={<>{metaLine(item)}{episodeSummary(item) ? ` · ${episodeSummary(item)}` : ''}</>}
+                  progress={watchPercent(watch)}
+                  trailing={<WatchBadge watch={watch} />}
+                  onClick={() => onSelectTorrent(item)}
+                  onRemove={() => confirmRemove(item)}
+                  removeTitle={t('downloads.remove')}
+                />
               )
             })}</div>}
+        {localSection}
       </div>
     )
   }

@@ -1,4 +1,4 @@
-import type { AppSettings, BatchAddSummary, CompatPlanResult, CompatProgressEvent, CompatStartResult, EngineNetworkStatus, Feed, GlobalStat, IPCResult, TaskImportSummary, TaskPeer, TorrentStatus, WatchProgress } from '../types'
+import type { AppSettings, BatchAddSummary, CompatPlanResult, CompatProgressEvent, CompatStartResult, EngineNetworkStatus, Feed, GlobalStat, IPCResult, LocalMediaEntry, TaskImportSummary, TaskPeer, TorrentFileInfo, TorrentStatus, WatchProgress } from '../types'
 
 // capabilities：该平台能否一键安装，决定设置页显示「安装」按钮还是面向普通用户的说明
 export interface InstallCapabilities { ytdlp: boolean; ffmpeg: boolean; deno: boolean }
@@ -66,6 +66,12 @@ export interface ElectronAPI {
   recordAbort: (id: string) => Promise<IPCResult>
   getPathForFile: (file: File) => string
   openFile: () => Promise<IPCResult<TorrentStatus>>
+  pickLocalMedia: () => Promise<IPCResult<LocalMediaEntry[]>>
+  addLocalMedia: (paths: string[]) => Promise<IPCResult<LocalMediaEntry[]>>
+  localList: () => Promise<IPCResult<LocalMediaEntry[]>>
+  removeLocalMedia: (path: string) => Promise<IPCResult<LocalMediaEntry[]>>
+  getLocalMediaUrl: (localPath: string) => Promise<string>
+  getLocalSubtitles: (videoPath: string) => Promise<IPCResult<TorrentFileInfo[]>>
   pickDownloadDir: () => Promise<IPCResult<string>>
   getSettings: () => Promise<IPCResult<AppSettings>>
   saveSettings: (patch: Partial<AppSettings>) => Promise<IPCResult<AppSettings>>
@@ -166,6 +172,12 @@ export const ipc: ElectronAPI = {
   recordAbort: (id) => getElectronAPI().recordAbort(id),
   getPathForFile: (file) => getElectronAPI().getPathForFile(file),
   openFile: () => getElectronAPI().openFile(),
+  pickLocalMedia: () => getElectronAPI().pickLocalMedia(),
+  addLocalMedia: (paths) => getElectronAPI().addLocalMedia(paths),
+  localList: () => getElectronAPI().localList(),
+  removeLocalMedia: (path) => getElectronAPI().removeLocalMedia(path),
+  getLocalMediaUrl: (localPath) => getElectronAPI().getLocalMediaUrl(localPath),
+  getLocalSubtitles: (videoPath) => getElectronAPI().getLocalSubtitles(videoPath),
   pickDownloadDir: () => getElectronAPI().pickDownloadDir(),
   getSettings: () => getElectronAPI().getSettings(),
   saveSettings: (patch) => getElectronAPI().saveSettings(patch),
