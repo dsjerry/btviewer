@@ -122,7 +122,7 @@ html[data-theme='light'] .log-line.warn,html[data-theme='light'] .log-line.warn 
 .settings-row input.has-error,.settings-textarea.has-error{border-color:var(--border-error)}
 .field-error{margin:8px 0 0;color:var(--error);font-size:12px}.field-hint{color:var(--text-dim2);font-size:12px}
 /* 设置页：开关行（托盘/自启） */
-.settings-check{display:flex;align-items:center;gap:9px;margin:0 0 10px;color:var(--text-soft);font-size:13px;cursor:pointer}
+.settings-check{display:flex;align-items:center;gap:9px;margin:0 0 10px;color:var(--text-soft);font-size:13px;cursor:pointer}.settings-check-group{display:grid;gap:2px;margin:12px 0 18px}.settings-check-group .settings-check{margin:0}
 .settings-check:last-child{margin-bottom:0}
 .settings-check input{width:15px;height:15px;margin:0;accent-color:var(--accent-text);cursor:pointer}
 .settings-check:hover{color:var(--text)}

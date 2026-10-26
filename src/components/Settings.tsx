@@ -326,13 +326,15 @@ const Settings: React.FC<{ theme: ThemeMode; onThemeChange: (mode: ThemeMode) =>
             <h3>{t('settings.window')}</h3>
             <p>{state.capabilities?.closeToTray === false ? t('settings.windowHintMac') : t('settings.windowHint')}</p>
             {/* 平台能力为 false 时不显示该开关：mac 没有托盘，关窗即关窗；未签名的 mac 构建也注册不了登录项 */}
-            {state.capabilities?.closeToTray !== false && <label className="settings-check"><input type="checkbox" checked={state.closeToTray !== false} onChange={(event) => void saveOption({ closeToTray: event.target.checked })} />{t('settings.closeToTray')}</label>}
-            {state.capabilities?.launchOnStartup !== false
-              ? <label className="settings-check"><input type="checkbox" checked={!!state.launchOnStartup} onChange={(event) => void saveOption({ launchOnStartup: event.target.checked })} />{t('settings.launchOnStartup')}</label>
-              : <p className="field-hint">{t('settings.launchOnStartupUnavailable')}</p>}
-            <label className="settings-check"><input type="checkbox" checked={state.notifyOnComplete !== false} onChange={(event) => void saveOption({ notifyOnComplete: event.target.checked })} />{t('settings.notify')}</label>
-            <label className="settings-check"><input type="checkbox" checked={state.registerMagnet === true} onChange={(event) => void saveOption({ registerMagnet: event.target.checked })} />{t('settings.registerMagnet')}</label>
-            <label className="settings-check"><input type="checkbox" checked={state.clipboardWatch === true} onChange={(event) => void saveOption({ clipboardWatch: event.target.checked })} />{t('settings.clipboardWatch')}</label>
+            <div className="settings-check-group">
+              {state.capabilities?.closeToTray !== false && <label className="settings-check"><input type="checkbox" checked={state.closeToTray !== false} onChange={(event) => void saveOption({ closeToTray: event.target.checked })} />{t('settings.closeToTray')}</label>}
+              {state.capabilities?.launchOnStartup !== false
+                ? <label className="settings-check"><input type="checkbox" checked={!!state.launchOnStartup} onChange={(event) => void saveOption({ launchOnStartup: event.target.checked })} />{t('settings.launchOnStartup')}</label>
+                : <p className="field-hint">{t('settings.launchOnStartupUnavailable')}</p>}
+              <label className="settings-check"><input type="checkbox" checked={state.notifyOnComplete !== false} onChange={(event) => void saveOption({ notifyOnComplete: event.target.checked })} />{t('settings.notify')}</label>
+              <label className="settings-check"><input type="checkbox" checked={state.registerMagnet === true} onChange={(event) => void saveOption({ registerMagnet: event.target.checked })} />{t('settings.registerMagnet')}</label>
+              <label className="settings-check"><input type="checkbox" checked={state.clipboardWatch === true} onChange={(event) => void saveOption({ clipboardWatch: event.target.checked })} />{t('settings.clipboardWatch')}</label>
+            </div>
             <div className="settings-label-row"><label className="settings-label" htmlFor="post-action">{t('settings.postAction')}</label></div>
             <div className="settings-row">
               <select id="post-action" value={state.postAction} onChange={(event) => void saveOption({ postAction: event.target.value as PostAction })}>
@@ -446,9 +448,11 @@ const Settings: React.FC<{ theme: ThemeMode; onThemeChange: (mode: ThemeMode) =>
               <input id="listen-port" type="text" className={listenPortError ? 'has-error' : ''} value={state.listenPort} onChange={(event) => setState({ ...state, listenPort: event.target.value })} placeholder="例如 6881 或 6881-6999；留空使用 aria2 默认" />
             </div>
             {listenPortError && <p className="field-error">{listenPortError}</p>}
-            <label className="settings-check"><input type="checkbox" checked={state.enableDht} onChange={(event) => void saveOption({ enableDht: event.target.checked })} />{t('settings.dht')}</label>
-            <label className="settings-check"><input type="checkbox" checked={state.enablePex} onChange={(event) => void saveOption({ enablePex: event.target.checked })} />{t('settings.pex')}</label>
-            <label className="settings-check"><input type="checkbox" checked={state.enableLpd} onChange={(event) => void saveOption({ enableLpd: event.target.checked })} />{t('settings.lpd')}</label>
+            <div className="settings-check-group">
+              <label className="settings-check"><input type="checkbox" checked={state.enableDht} onChange={(event) => void saveOption({ enableDht: event.target.checked })} />{t('settings.dht')}</label>
+              <label className="settings-check"><input type="checkbox" checked={state.enablePex} onChange={(event) => void saveOption({ enablePex: event.target.checked })} />{t('settings.pex')}</label>
+              <label className="settings-check"><input type="checkbox" checked={state.enableLpd} onChange={(event) => void saveOption({ enableLpd: event.target.checked })} />{t('settings.lpd')}</label>
+            </div>
             <div className="settings-row">
               <select value={state.btEncryption} onChange={(event) => void saveOption({ btEncryption: event.target.value === 'require' ? 'require' : 'auto' })}>
                 <option value="auto">{t('settings.encryptionAuto')}</option>
@@ -488,8 +492,10 @@ const Settings: React.FC<{ theme: ThemeMode; onThemeChange: (mode: ThemeMode) =>
                 {seedMinutesError && <p className="field-error">{seedMinutesError}</p>}
               </>
             )}
-            <label className="settings-check"><input type="checkbox" checked={state.streamPriority} onChange={(event) => void saveOption({ streamPriority: event.target.checked })} />{t('settings.streamPriority')}</label>
-            <label className="settings-check"><input type="checkbox" checked={state.autoRetry} onChange={(event) => void saveOption({ autoRetry: event.target.checked })} />{t('settings.autoRetry')}</label>
+            <div className="settings-check-group">
+              <label className="settings-check"><input type="checkbox" checked={state.streamPriority} onChange={(event) => void saveOption({ streamPriority: event.target.checked })} />{t('settings.streamPriority')}</label>
+              <label className="settings-check"><input type="checkbox" checked={state.autoRetry} onChange={(event) => void saveOption({ autoRetry: event.target.checked })} />{t('settings.autoRetry')}</label>
+            </div>
             {state.autoRetry && (
               <>
                 <div className="settings-row">
