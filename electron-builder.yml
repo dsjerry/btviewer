@@ -24,17 +24,18 @@ extraResources:
     to: icon.png
 # 文件关联与协议注册在安装期完成（比运行期写注册表可靠）：
 # 双击 .torrent/.metalink 打开应用，点网页磁力链接唤起应用（应用内用单实例把输入转给已运行实例）
+# 不给 fileAssociation 单独指定 icon：icon.ico 与应用图标是同一个文件，mac 上会被转成 icon.icns
+# 与 applyCommonInfo 先写入的主图标重名，electron-builder 硬链接时抛 EEXIST（打包直接失败）。
+# 不指定时 Windows 关联图标自动回退到应用 exe，行为不变。
 fileAssociations:
   - ext: torrent
     name: BitTorrent 种子文件
     description: BTViewer 种子文件
     role: Viewer
-    icon: resources/icon.ico
   - ext: metalink
     name: Metalink 下载描述文件
     description: BTViewer Metalink 文件
     role: Viewer
-    icon: resources/icon.ico
 protocols:
   - name: Magnet Link
     schemes:
