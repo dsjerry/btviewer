@@ -3,7 +3,7 @@ import { ipc } from '../services/ipc'
 import type { InstallCapabilities, LogEntry, LogFileInfo } from '../services/ipc'
 import { t } from '../services/i18n'
 import pkg from '../../package.json'
-import { validateListenPort, validateRetries, validateSeedMinutes, validateSeedRatio, validateSizeLimit } from '../services/validate'
+import { fieldPatch, requiresEngineRestart, validateField, type EditableField } from '../services/settings-fields'
 import { POST_ACTION_LABELS } from '../../electron/post-action'
 import type { AppSettings, EngineNetworkStatus, Language, PostAction, ThemeMode } from '../types'
 
@@ -68,24 +68,8 @@ const LANGUAGE_OPTIONS: Array<{ value: Language; label: string; icon: string }> 
   { value: 'en', label: 'English', icon: 'A' }
 ]
 
-// 即时校验：返回错误文案，空串表示通过
-function validateTrackers(value: string): string {
-  const list = value.split(/[\s,]+/).filter(Boolean)
-  if (!list.length) return ''
-  const invalid = list.find((item) => !/^(udp|https?|wss?):\/\//i.test(item))
-  return invalid ? `无效 tracker（需以 udp://、http(s):// 或 ws(s):// 开头）：${invalid.slice(0, 60)}` : ''
-}
-// 代理格式：http(s)://host:port 或 socks4/5://host:port；留空表示不使用
-const PROXY_RE = /^(https?|socks4a?|socks5h?):\/\/[^\s]+$/i
-function validateProxy(value: string): string {
-  const proxy = value.trim()
-  if (!proxy) return ''
-  return PROXY_RE.test(proxy) ? '' : t('settings.proxyInvalid')
-}
-
 const Settings: React.FC<{ theme: ThemeMode; onThemeChange: (mode: ThemeMode) => void; language: Language; onLanguageChange: (language: Language) => void }> = ({ theme, onThemeChange, language, onLanguageChange }) => {
   const [state, setState] = useState<SettingsState | null>(null)
-  const [saving, setSaving] = useState(false)
   const [notice, setNotice] = useState<{ type: 'error' | 'success'; text: string } | null>(null)
   // yt-dlp 可用性：页面打开时自动检测一次，也可手动重新检测
   const [ytdlpState, setYtdlpState] = useState<{ checking: boolean; available?: boolean; ffmpeg?: boolean; jsRuntime?: { name: string; path: string; version?: string } | null; path?: string; capabilities?: InstallCapabilities }>({ checking: false })
@@ -98,15 +82,12 @@ const Settings: React.FC<{ theme: ThemeMode; onThemeChange: (mode: ThemeMode) =>
   // 下载引擎网络状态（监听端口 / 是否需要重启生效）
   const [network, setNetwork] = useState<EngineNetworkStatus | null>(null)
   const [restarting, setRestarting] = useState(false)
-  // 输入即校验；有错误时禁用保存
-  const speedLimitError = state ? validateSizeLimit(state.speedLimit) : ''
-  const trackersError = state ? validateTrackers(state.trackers) : ''
-  const proxyError = state ? validateProxy(state.proxy) : ''
-  const listenPortError = state ? validateListenPort(state.listenPort) : ''
-  const seedRatioError = state && state.seedMode === 'ratio' ? validateSeedRatio(state.seedRatio) : ''
-  const seedMinutesError = state && state.seedMode === 'time' ? validateSeedMinutes(state.seedMinutes) : ''
-  const retriesError = state && state.autoRetry ? validateRetries(state.maxRetries) : ''
-  const hasValidationError = !!speedLimitError || !!trackersError || !!proxyError || !!listenPortError || !!seedRatioError || !!seedMinutesError || !!retriesError
+  // 输入框的编辑草稿：值仍是合法内容时提交并立即生效，非法时只提示错误、保留用户输入
+  const [draft, setDraft] = useState<Partial<Record<EditableField, string>>>({})
+  const [fieldError, setFieldError] = useState<Partial<Record<EditableField, string>>>({})
+  // 最近一次成功保存的字段：用于「已保存」行内反馈
+  const [savedField, setSavedField] = useState<EditableField | null>(null)
+  const savedTimer = React.useRef(0)
 
   useEffect(() => { try { return ipc.onYtdlpInstallProgress((progress) => setInstallProgress(progress)) } catch { return () => undefined } }, [])
   useEffect(() => { try { return ipc.onFfmpegInstallProgress((progress) => setFfmpegProgress(progress)) } catch { return () => undefined } }, [])
@@ -183,31 +164,53 @@ const Settings: React.FC<{ theme: ThemeMode; onThemeChange: (mode: ThemeMode) =>
     })()
   }, [])
 
-  const save = async () => {
-    if (!state || hasValidationError) return
-    const limit = state.speedLimit.trim() || '0'
-    setSaving(true); setNotice(null)
-    try {
-      const result = await ipc.saveSettings({ downloadDir: state.downloadDir, trackers: state.trackers, maxConcurrentDownloads: state.maxConcurrentDownloads, speedLimit: limit, httpSplit: state.httpSplit, ytdlpPath: state.ytdlpPath.trim(), ytdlpBrowser: state.ytdlpBrowser, proxy: state.proxy.trim(), listenPort: state.listenPort.trim(), seedMode: state.seedMode, seedRatio: state.seedRatio, seedMinutes: state.seedMinutes, maxRetries: state.maxRetries })
-      if (result.success && result.data) {
-        setState(toState(result.data, state))
-        setNotice({ type: 'success', text: t('settings.saved') })
-      } else {
-        setNotice({ type: 'error', text: result.error || t('settings.saveFailed') })
-      }
-    } finally { setSaving(false) }
-  }
-
-  // 开关类设置立即生效，不等「保存设置」；网络类选项改动后引擎会标记「需重启」
+  // 统一的写入出口：所有改动（下拉、复选框、输入框失焦）都走这里，改完即生效
   const saveOption = async (patch: Partial<AppSettings>) => {
+    if (!state) return
     try {
       const result = await ipc.saveSettings(patch)
       if (result.success && result.data) {
-        setState((prev) => prev ? toState(result.data as AppSettings, prev) : prev)
+        const data = result.data as AppSettings
+        setState((prev) => prev ? toState(data, prev) : prev)
+        // 主进程可能回退某些值（如系统拒绝登记开机自启），草稿清空以显示真实状态
+        setDraft({})
         if ('listenPort' in patch || 'enableDht' in patch || 'enablePex' in patch || 'enableLpd' in patch || 'btEncryption' in patch) void refreshNetwork()
-      } else setNotice({ type: 'error', text: result.error || t('settings.saveFailed') })
-    } catch (error) { setNotice({ type: 'error', text: error instanceof Error ? error.message : t('settings.saveFailed') }) }
+        return true
+      }
+      setNotice({ type: 'error', text: result.error || t('settings.saveFailed') })
+      return false
+    } catch (error) {
+      setNotice({ type: 'error', text: error instanceof Error ? error.message : t('settings.saveFailed') })
+      return false
+    }
   }
+
+  // 输入框：先更新草稿（保证输入跟手），再按字段规则决定是否提交
+  const changeField = (field: EditableField, value: string) => {
+    if (!state) return
+    setDraft((prev) => ({ ...prev, [field]: value }))
+    const error = validateField(field, value, state)
+    setFieldError((prev) => ({ ...prev, [field]: error || undefined }))
+  }
+
+  // 失焦提交：合法就写盘生效；非法则保留输入并显示错误，不提交
+  const commitField = async (field: EditableField) => {
+    if (!state) return
+    const value = draft[field] ?? String(state[field] ?? '')
+    const error = validateField(field, value, state)
+    if (error) { setFieldError((prev) => ({ ...prev, [field]: error })); return }
+    const patch = fieldPatch(field, value, state)
+    if (!patch) { setDraft((prev) => { const next = { ...prev }; delete next[field]; return next }); return }
+    if (await saveOption(patch)) {
+      setSavedField(field)
+      window.clearTimeout(savedTimer.current)
+      savedTimer.current = window.setTimeout(() => setSavedField(null), 1800)
+      if (requiresEngineRestart(field)) void refreshNetwork()
+    }
+  }
+
+  // 输入框的当前值：有草稿用草稿，否则用已保存的值
+  const fieldValue = (field: EditableField): string => draft[field] ?? String(state?.[field] ?? '')
 
   // 网络类选项（监听端口/DHT/PEX/LPD/加密）是 aria2 命令行参数，改完必须重启引擎
   const restartEngine = async () => {
@@ -219,9 +222,27 @@ const Settings: React.FC<{ theme: ThemeMode; onThemeChange: (mode: ThemeMode) =>
     } catch (error) { setNotice({ type: 'error', text: error instanceof Error ? error.message : t('settings.restartFailed') }) } finally { setRestarting(false) }
   }
 
+  // 恢复默认值：只重置下载行为相关参数；下载目录、语言、主题、路径类设置保持不动
+  const [resetting, setResetting] = useState(false)
+  const resetDefaults = async () => {
+    if (!confirm(t('settings.resetConfirm'))) return
+    setResetting(true)
+    try {
+      const ok = await saveOption({
+        trackers: '', proxy: '', speedLimit: '0', listenPort: '', httpSplit: 8, maxConcurrentDownloads: 5,
+        enableDht: true, enablePex: true, enableLpd: true, btEncryption: 'auto',
+        seedMode: 'off', seedRatio: 1, seedMinutes: 60, streamPriority: true, autoRetry: true, maxRetries: 3
+      })
+      if (ok) { setDraft({}); setFieldError({}); setNotice({ type: 'success', text: t('settings.resetDone') }); void refreshNetwork() }
+    } finally { setResetting(false) }
+  }
+
   const pickDir = async () => {
     const result = await ipc.pickDownloadDir()
-    if (result.success && result.data && state) setState({ ...state, downloadDir: result.data })
+    if (result.success && result.data && state) {
+      setState({ ...state, downloadDir: result.data })
+      await saveOption({ downloadDir: result.data })
+    }
   }
 
   const openDir = async () => {
@@ -346,44 +367,47 @@ const Settings: React.FC<{ theme: ThemeMode; onThemeChange: (mode: ThemeMode) =>
           <div className="settings-card">
             <h3>{t('settings.trackers')}</h3>
             <p>{t('settings.trackersHint')}</p>
-            <textarea className={`settings-textarea ${trackersError ? 'has-error' : ''}`} rows={4} value={state.trackers} onChange={(event) => setState({ ...state, trackers: event.target.value })} placeholder="udp://tracker.example.org:1337/announce, https://tracker.example.com:443/announce" />
-            {trackersError && <p className="field-error">{trackersError}</p>}
+            <textarea className={`settings-textarea ${fieldError.trackers ? 'has-error' : ''}`} rows={4} value={fieldValue('trackers')} onChange={(event) => changeField('trackers', event.target.value)} onBlur={() => void commitField('trackers')} placeholder="udp://tracker.example.org:1337/announce, https://tracker.example.com:443/announce" />
+            {fieldError.trackers && <p className="field-error">{fieldError.trackers}</p>}
+            {savedField === 'trackers' && <p className="field-ok">{t('settings.fieldSaved')}</p>}
           </div>
           <div className="settings-card">
             <h3>{t('settings.maxConcurrent')}</h3>
             <p>{t('settings.maxConcurrentHint')}</p>
             <div className="settings-row">
-              <input type="number" min={1} max={10} value={state.maxConcurrentDownloads} onChange={(event) => setState({ ...state, maxConcurrentDownloads: Number(event.target.value) })} />
+              <input type="number" min={1} max={10} value={fieldValue('maxConcurrentDownloads')} onChange={(event) => changeField('maxConcurrentDownloads', event.target.value)} onBlur={() => void commitField('maxConcurrentDownloads')} />
             </div>
           </div>
           <div className="settings-card">
             <h3>{t('settings.speedLimit')}</h3>
             <p>{t('settings.speedLimitHint')}</p>
             <div className="settings-row">
-              <input type="text" className={speedLimitError ? 'has-error' : ''} value={state.speedLimit} onChange={(event) => setState({ ...state, speedLimit: event.target.value })} placeholder="例如 10M、512K；0 为不限速" />
+              <input type="text" className={fieldError.speedLimit ? 'has-error' : ''} value={fieldValue('speedLimit')} onChange={(event) => changeField('speedLimit', event.target.value)} onBlur={() => void commitField('speedLimit')} placeholder="例如 10M、512K；0 为不限速" />
             </div>
-            {speedLimitError && <p className="field-error">{speedLimitError}</p>}
+            {fieldError.speedLimit && <p className="field-error">{fieldError.speedLimit}</p>}
+            {savedField === 'speedLimit' && <p className="field-ok">{t('settings.fieldSaved')}</p>}
           </div>
           <div className="settings-card">
             <h3>{t('settings.proxy')}</h3>
             <p>{t('settings.proxyHint')}</p>
             <div className="settings-row">
-              <input type="text" className={proxyError ? 'has-error' : ''} value={state.proxy} onChange={(event) => setState({ ...state, proxy: event.target.value })} placeholder="例如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080；留空不使用" />
+              <input type="text" className={fieldError.proxy ? 'has-error' : ''} value={fieldValue('proxy')} onChange={(event) => changeField('proxy', event.target.value)} onBlur={() => void commitField('proxy')} placeholder="例如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080；留空不使用" />
             </div>
-            {proxyError && <p className="field-error">{proxyError}</p>}
+            {fieldError.proxy && <p className="field-error">{fieldError.proxy}</p>}
+            {savedField === 'proxy' && <p className="field-ok">{t('settings.fieldSaved')}</p>}
           </div>
           <div className="settings-card">
             <h3>{t('settings.direct')}</h3>
             <p>{t('settings.directHint')}</p>
             <div className="settings-row">
-              <input type="number" min={1} max={16} value={state.httpSplit} onChange={(event) => setState({ ...state, httpSplit: Math.max(1, Math.min(16, Number(event.target.value) || 8)) })} />
+              <input type="number" min={1} max={16} value={fieldValue('httpSplit')} onChange={(event) => changeField('httpSplit', event.target.value)} onBlur={() => void commitField('httpSplit')} />
             </div>
           </div>
           <div className="settings-card settings-card-tooltip">
             <h3>{t('settings.ytdlp')}</h3>
             <p>{t('settings.ytdlpHint')}</p>
             <div className="settings-row">
-              <input type="text" value={state.ytdlpPath} onChange={(event) => setState({ ...state, ytdlpPath: event.target.value })} placeholder="留空自动查找（内置安装目录与系统 PATH）" />
+              <input type="text" value={fieldValue('ytdlpPath')} onChange={(event) => changeField('ytdlpPath', event.target.value)} onBlur={() => void commitField('ytdlpPath')} placeholder={t('settings.ytdlpPathPlaceholder')} />
               <button className="small-button" onClick={() => void checkYtdlp(state.ytdlpPath.trim() || undefined)} disabled={ytdlpState.checking || !!installProgress}>{ytdlpState.checking ? t('settings.detecting') : t('settings.detectAvailability')}</button>
             </div>
             {ytdlpState.available === true && (
@@ -435,7 +459,7 @@ const Settings: React.FC<{ theme: ThemeMode; onThemeChange: (mode: ThemeMode) =>
               </span>
             </div>
             <div className="settings-row">
-              <select id="ytdlp-browser" value={state.ytdlpBrowser} onChange={(event) => setState({ ...state, ytdlpBrowser: event.target.value })}>
+              <select id="ytdlp-browser" value={state.ytdlpBrowser} onChange={(event) => void saveOption({ ytdlpBrowser: event.target.value })}>
                 {browserOptions().map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
               </select>
             </div>
@@ -445,9 +469,10 @@ const Settings: React.FC<{ theme: ThemeMode; onThemeChange: (mode: ThemeMode) =>
             <p>{t('settings.networkHint')}</p>
             <div className="settings-label-row"><label className="settings-label" htmlFor="listen-port">{t('settings.listenPort')}</label></div>
             <div className="settings-row">
-              <input id="listen-port" type="text" className={listenPortError ? 'has-error' : ''} value={state.listenPort} onChange={(event) => setState({ ...state, listenPort: event.target.value })} placeholder="例如 6881 或 6881-6999；留空使用 aria2 默认" />
+              <input id="listen-port" type="text" className={fieldError.listenPort ? 'has-error' : ''} value={fieldValue('listenPort')} onChange={(event) => changeField('listenPort', event.target.value)} onBlur={() => void commitField('listenPort')} placeholder="例如 6881 或 6881-6999；留空使用 aria2 默认" />
             </div>
-            {listenPortError && <p className="field-error">{listenPortError}</p>}
+            {fieldError.listenPort && <p className="field-error">{fieldError.listenPort}</p>}
+            {savedField === 'listenPort' && <p className="field-ok">{t('settings.fieldSavedRestart')}</p>}
             <div className="settings-check-group">
               <label className="settings-check"><input type="checkbox" checked={state.enableDht} onChange={(event) => void saveOption({ enableDht: event.target.checked })} />{t('settings.dht')}</label>
               <label className="settings-check"><input type="checkbox" checked={state.enablePex} onChange={(event) => void saveOption({ enablePex: event.target.checked })} />{t('settings.pex')}</label>
@@ -468,7 +493,7 @@ const Settings: React.FC<{ theme: ThemeMode; onThemeChange: (mode: ThemeMode) =>
             <h3>{t('settings.seeding')}</h3>
             <p>{t('settings.seedingHint')}</p>
             <div className="settings-row">
-              <select value={state.seedMode} onChange={(event) => setState({ ...state, seedMode: event.target.value as 'off' | 'ratio' | 'time' })}>
+              <select value={state.seedMode} onChange={(event) => void saveOption({ seedMode: event.target.value as 'off' | 'ratio' | 'time' })}>
                 <option value="off">{t('settings.seedOff')}</option>
                 <option value="ratio">{t('settings.seedRatio')}</option>
                 <option value="time">{t('settings.seedTime')}</option>
@@ -477,19 +502,19 @@ const Settings: React.FC<{ theme: ThemeMode; onThemeChange: (mode: ThemeMode) =>
             {state.seedMode === 'ratio' && (
               <>
                 <div className="settings-row">
-                  <input type="number" min={0} max={100} step={0.1} className={seedRatioError ? 'has-error' : ''} value={state.seedRatio} onChange={(event) => setState({ ...state, seedRatio: Number(event.target.value) })} />
+                  <input type="number" min={0} max={100} step={0.1} className={fieldError.seedRatio ? 'has-error' : ''} value={fieldValue('seedRatio')} onChange={(event) => changeField('seedRatio', event.target.value)} onBlur={() => void commitField('seedRatio')} />
                   <span className="settings-unit">{t('settings.unitRatio')}</span>
                 </div>
-                {seedRatioError && <p className="field-error">{seedRatioError}</p>}
+                {fieldError.seedRatio && <p className="field-error">{fieldError.seedRatio}</p>}
               </>
             )}
             {state.seedMode === 'time' && (
               <>
                 <div className="settings-row">
-                  <input type="number" min={1} max={43200} className={seedMinutesError ? 'has-error' : ''} value={state.seedMinutes} onChange={(event) => setState({ ...state, seedMinutes: Number(event.target.value) })} />
+                  <input type="number" min={1} max={43200} className={fieldError.seedMinutes ? 'has-error' : ''} value={fieldValue('seedMinutes')} onChange={(event) => changeField('seedMinutes', event.target.value)} onBlur={() => void commitField('seedMinutes')} />
                   <span className="settings-unit">{t('settings.unitMinutes')}</span>
                 </div>
-                {seedMinutesError && <p className="field-error">{seedMinutesError}</p>}
+                {fieldError.seedMinutes && <p className="field-error">{fieldError.seedMinutes}</p>}
               </>
             )}
             <div className="settings-check-group">
@@ -499,10 +524,10 @@ const Settings: React.FC<{ theme: ThemeMode; onThemeChange: (mode: ThemeMode) =>
             {state.autoRetry && (
               <>
                 <div className="settings-row">
-                  <input type="number" min={0} max={10} className={retriesError ? 'has-error' : ''} value={state.maxRetries} onChange={(event) => setState({ ...state, maxRetries: Number(event.target.value) })} />
+                  <input type="number" min={0} max={10} className={fieldError.maxRetries ? 'has-error' : ''} value={fieldValue('maxRetries')} onChange={(event) => changeField('maxRetries', event.target.value)} onBlur={() => void commitField('maxRetries')} />
                   <span className="settings-unit">{t('settings.unitRetries')}</span>
                 </div>
-                {retriesError && <p className="field-error">{retriesError}</p>}
+                {fieldError.maxRetries && <p className="field-error">{fieldError.maxRetries}</p>}
               </>
             )}
           </div>
@@ -551,9 +576,10 @@ const Settings: React.FC<{ theme: ThemeMode; onThemeChange: (mode: ThemeMode) =>
               </p>
             )}
           </div>
+          {/* 所有设置改完即生效，这里只保留「恢复默认值」与打开日志目录 */}
           <div className="settings-actions">
-            <button className="primary-action" onClick={() => void save()} disabled={saving || hasValidationError}>{saving ? t('settings.saving') : t('settings.save')}<span>→</span></button>
-            <button className="secondary-action" onClick={() => { if (state?.logDir) void ipc.openPath(state.logDir) }}>打开日志目录</button>
+            <button className="secondary-action" onClick={() => void resetDefaults()} disabled={resetting}>{resetting ? t('settings.resetting') : t('settings.resetDefaults')}</button>
+            <button className="secondary-action" onClick={() => { if (state?.logDir) void ipc.openPath(state.logDir) }}>{t('settings.openLogDir')}</button>
           </div>
           {notice && <div className={`inline-notice ${notice.type}`}>{notice.type === 'error' ? '!' : '✓'} {notice.text}</div>}
           <div className="about-card">

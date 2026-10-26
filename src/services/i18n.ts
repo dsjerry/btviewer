@@ -425,7 +425,6 @@ const MESSAGES: Record<string, [string, string]> = {
   'settings.ffmpegReady': ['ffmpeg 就绪，出错的视频任务已自动重试', 'ffmpeg is ready; failed video tasks were retried automatically'],
   'settings.denoReady': ['deno 就绪，YouTube 高画质解析已启用，出错的视频任务已自动重试', 'deno is ready — high-resolution YouTube parsing is enabled and failed video tasks were retried'],
   'settings.loadFailed': ['读取设置失败', 'Could not load settings'],
-  'settings.saved': ['设置已保存并对新任务生效', 'Saved; applies to new tasks'],
   'settings.saveFailed': ['保存失败', 'Could not save'],
   'settings.engineRestarted': ['下载引擎已重启，网络设置已生效', 'Engine restarted; the network settings are now active'],
   'settings.restartFailed': ['重启失败', 'Restart failed'],
@@ -465,8 +464,13 @@ const MESSAGES: Record<string, [string, string]> = {
   'settings.noLogContent': ['还没有日志内容', 'No log content yet'],
   'settings.checking': ['查询中…', 'Checking…'],
   'settings.checkUpdates': ['检查更新', 'Check for updates'],
-  'settings.saving': ['保存中…', 'Saving…'],
-  'settings.save': ['保存设置', 'Save settings'],
+  'settings.fieldSaved': ['已保存', 'Saved'],
+  'settings.fieldSavedRestart': ['已保存，重启下载引擎后生效', 'Saved — takes effect after restarting the engine'],
+  'settings.resetDefaults': ['恢复默认值', 'Reset to defaults'],
+  'settings.resetting': ['正在恢复…', 'Resetting…'],
+  'settings.resetConfirm': ['将下载相关设置恢复为默认值（不影响下载目录、语言与主题）。继续？', 'Reset download-related settings to defaults (download folder, language and theme are kept). Continue?'],
+  'settings.resetDone': ['已恢复默认值', 'Defaults restored'],
+  'settings.ytdlpPathPlaceholder': ['留空自动查找（内置安装目录与系统 PATH）', 'Leave empty to auto-detect (bundled folder and system PATH)'],
 
   // ── 订阅页提示（C6e）────────────────────────────────────────
   'feeds.loadFailed': ['读取订阅失败', 'Could not load feeds'],
