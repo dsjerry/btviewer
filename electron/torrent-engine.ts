@@ -11,6 +11,7 @@ import { clearDetectCache, detectBinary, detectJsRuntime, jsRuntimeArg, parsePro
 import { PRIORITIZE_TAIL, ariaSize, prioritizePieceOption } from './stream-priority'
 import { compatCommand, parseFfmpegProgress, parseMediaInfo, parseProbeJson, planCompatPlayback, probeCommand, type CompatMode, type MediaStreams } from './media-transcode'
 import { parseByteRange } from './http-range'
+import { buildBtTrackers, splitTrackers } from './tracker-merge'
 import { buildRangeResponse, getMime, isAttachableSubtitle, isWithinRoot, parseStreamRoute, tokenMatches } from './stream-server'
 import { computeProgress, computeTimeRemaining, isFinished as isFinishedBytes, mapAriaState, retryDelayMs, selectFileIndexes } from './aria-status'
 import { extractEmbeddedCover } from './cover-art'
@@ -146,8 +147,14 @@ function executablePath() {
 }
 function trackerList(override = '') {
   // 优先级：设置页自定义 > ARIA2_TRACKERS 环境变量 > 内置快照
-  const custom = (override || process.env.ARIA2_TRACKERS || '').split(/[\s,]+/).filter(Boolean)
+  const custom = splitTrackers(override || process.env.ARIA2_TRACKERS || '')
   return (custom.length ? custom : DEFAULT_TRACKERS).join(',')
+}
+// 新任务的 bt-tracker：任务自带（磁力里的 &tr=、.torrent 的 announce）优先，再并入配置里的公共 tracker
+function resolveBtTrackers(source: string, isTorrentFile: boolean, override = '') {
+  const extra = splitTrackers(trackerList(override))
+  const own = isTorrentFile ? [] : buildBtTrackers(source.startsWith('magnet:?') ? source : undefined, [])
+  return [...own, ...extra.filter((item) => !own.some((mine) => mine.toLowerCase() === item.toLowerCase()))].join(',')
 }
 
 // aria2 的 RPC 不返回 infoHash，.torrent 文件在本地解析 info 字典并计算 sha1
@@ -836,7 +843,7 @@ class TorrentEngine {
     // dir：任务级保存目录（RSS 按季归类用），覆盖全局下载目录
     // seedOptions：做种策略是下载选项，只能建任务时给定
     // bt-prioritize-piece：边下边播优化，head/tail 优先保证起播（MP4 的 moov 可能在尾部）
-    const options = { ...this.seedOptions(), 'bt-tracker': trackerList(this.trackerOverride), ...(this.streamPriority ? { 'bt-prioritize-piece': prioritizePieceOption() } : {}), ...(opts.dir ? { dir: opts.dir } : {}), ...(isTorrentFile ? { pause: 'true' } : { 'pause-metadata': 'true', 'bt-save-metadata': 'true' }) }
+    const options = { ...this.seedOptions(), 'bt-tracker': resolveBtTrackers(id, isTorrentFile, this.trackerOverride), ...(this.streamPriority ? { 'bt-prioritize-piece': prioritizePieceOption() } : {}), ...(opts.dir ? { dir: opts.dir } : {}), ...(isTorrentFile ? { pause: 'true' } : { 'pause-metadata': 'true', 'bt-save-metadata': 'true' }) }
     const gid = await this.rpc<string>('addUri', [[id], options])
     if (!isTorrentFile) this.metadataGids.add(gid)
     const first = await this.refreshGid(gid, hash || gid, onStatus)
