@@ -12,6 +12,7 @@ import { PRIORITIZE_TAIL, ariaSize, prioritizePieceOption } from './stream-prior
 import { compatCommand, parseFfmpegProgress, parseMediaInfo, parseProbeJson, planCompatPlayback, probeCommand, type CompatMode, type MediaStreams } from './media-transcode'
 import { parseByteRange } from './http-range'
 import { buildBtTrackers, splitTrackers } from './tracker-merge'
+import { decideMetadataPhase } from './metadata-wait'
 import { buildRangeResponse, getMime, isAttachableSubtitle, isWithinRoot, parseStreamRoute, tokenMatches } from './stream-server'
 import { computeProgress, computeTimeRemaining, isFinished as isFinishedBytes, mapAriaState, retryDelayMs, selectFileIndexes } from './aria-status'
 import { extractEmbeddedCover } from './cover-art'
@@ -857,24 +858,39 @@ class TorrentEngine {
     if (isTorrentFile) return this.toTorrentStatus(key, first)
     if (opts.wait !== false) await this.waitForMetadata(key)
     const status = this.statuses.get(key.toLowerCase()) || this.statuses.get(key)
-    if (!status) throw new Error('下载任务正在解析，请稍候')
+    // 超时不再是错误：任务已登记，界面会显示「仍在获取文件列表」，用户可以继续等或删除
+    if (!status) return this.toTorrentStatus(key, first)
     return this.toTorrentStatus(key, status)
   }
 
-  private async waitForMetadata(hash: string, timeoutMs = 30000) {
-    const deadline = Date.now() + timeoutMs
+  // 等待磁力元数据：不再 30 秒硬超时直接报错。超时后任务仍留在列表里继续尝试，
+  // 只是把「还在等」变成「可能较慢」的提示；真正拿到文件列表就返回。
+  private async waitForMetadata(hash: string, options: { giveUpAfterMs?: number } = {}) {
+    const started = Date.now()
     let metadataAt = 0
-    while (Date.now() < deadline) {
+    let lastPhase = ''
+    while (true) {
       const status = this.statuses.get(hash.toLowerCase()) || this.statuses.get(hash)
-      if (status?.status === 'error') return
-      // 真实文件列表已就位（后续任务已接管）时立即返回；父任务帧可能带 [METADATA] 占位文件，需排除
-      if (status && status.files?.length && !this.metadataGids.has(status.gid) && !status.followedBy?.length) return
-      if (status?.bittorrent?.info?.name) {
-        // metadata 已到达：稍等后续任务接管，用真实文件列表替换 [METADATA] 占位
-        if (!status.followedBy?.length) {
-          if (!metadataAt) metadataAt = Date.now()
-          if (Date.now() - metadataAt > 2500) return
-        }
+      const elapsed = Date.now() - started
+      const snapshot = {
+        isPlaceholder: !!status && this.metadataGids.has(status.gid),
+        hasFiles: !!status?.files?.length,
+        hasName: !!status?.bittorrent?.info?.name,
+        followedBy: !!status?.followedBy?.length,
+        error: status?.status === 'error' ? status.errorMessage || 'error' : undefined,
+        connections: toNumber(status?.connections)
+      }
+      const decision = decideMetadataPhase(snapshot, elapsed, options)
+      if (decision.phase !== lastPhase) {
+        lastPhase = decision.phase
+        logger.info('tasks', `metadata ${hash.slice(0, 8)}: ${decision.phase} (${Math.round(elapsed / 1000)}s, peers=${snapshot.connections})`)
+      }
+      // settling 与 waiting 都继续轮询；ready/error/stalled(giveUp) 结束等待
+      if (decision.done) return
+      // 元数据到手后等多拍，让后续任务接管并把 [METADATA] 占位替换成真实文件列表
+      if (decision.phase === 'settling') {
+        if (!metadataAt) metadataAt = Date.now()
+        if (Date.now() - metadataAt > 2500) return
       }
       await new Promise((resolve) => setTimeout(resolve, 500))
     }

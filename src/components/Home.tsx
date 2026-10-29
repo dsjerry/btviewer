@@ -39,6 +39,24 @@ const Home: React.FC<HomeProps> = ({ parsingTask, onParsingChange, onTorrentAdde
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set())
   // 勾选状态按任务初始化：文件列表首次到达时默认勾选全部媒体与字幕
   const selectionRef = useRef<{ hash: string; initialized: boolean }>({ hash: '', initialized: false })
+  // 等待元数据的时长：用于把「正在获取」逐步升级为「较慢，建议多等一会儿」而不是突然报错
+  const [waitedSeconds, setWaitedSeconds] = useState(0)
+  // 只在「解析中且还没有文件列表」时走秒表；依赖取原始值避免每次状态推送都重建定时器
+  const parsingHash = parsingTask?.infoHash ?? ''
+  const parsingFileCount = parsingTask?.files.length ?? 0
+  useEffect(() => {
+    setWaitedSeconds(0)
+    if (!parsingHash || parsingFileCount > 0) return
+    const timer = window.setInterval(() => setWaitedSeconds((value) => value + 1), 1000)
+    return () => window.clearInterval(timer)
+  }, [parsingHash, parsingFileCount])
+  const waitHint = !parsingTask
+    ? ''
+    : waitedSeconds < 10
+      ? t('home.waitingMetaHint')
+      : waitedSeconds < 45
+        ? t('home.waitingMetaSlow', { seconds: Math.floor(waitedSeconds / 10) * 10 })
+        : t('home.waitingMetaLong', { seconds: waitedSeconds })
 
   useEffect(() => {
     if (!parsingTask || !parsingTask.files.length) return
@@ -204,7 +222,10 @@ const Home: React.FC<HomeProps> = ({ parsingTask, onParsingChange, onTorrentAdde
             <div className="waiting-result">
               <div className="loading-spinner" />
               <span>{t('home.waitingMeta')}</span>
-              <small>{t('home.waitingMetaHint')}</small>
+              <small>{waitHint}</small>
+              {waitedSeconds >= 45 && (
+                <small className="waiting-result-advice">{t('home.waitingMetaStalled')}</small>
+              )}
             </div>
           )}
           <p className="privacy-note"><span>◉</span> {t('home.pendingNote')}</p>
