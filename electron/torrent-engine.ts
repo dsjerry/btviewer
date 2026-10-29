@@ -13,6 +13,7 @@ import { compatCommand, parseFfmpegProgress, parseMediaInfo, parseProbeJson, pla
 import { parseByteRange } from './http-range'
 import { buildBtTrackers, splitTrackers } from './tracker-merge'
 import { decideMetadataPhase } from './metadata-wait'
+import { isRangeDownloaded, pieceLengthFromBitfield } from './piece-availability'
 import { companionSubtitleIndexes, mergeSelectFileIndexes } from './file-selection'
 import { filterMetadataPlaceholders, resolveTaskName, displayNameFromMagnet } from './torrent-display'
 import { buildRangeResponse, getMime, isAttachableSubtitle, isWithinRoot, parseStreamRoute, tokenMatches } from './stream-server'
@@ -53,7 +54,7 @@ const DEFAULT_TRACKERS = [
 
 type RpcResponse<T> = { result?: T; error?: { code: number; message: string } }
 type AriaFile = { index: string; path: string; length: string; completedLength: string; selected: string }
-type AriaStatus = { gid: string; status: string; totalLength: string; completedLength: string; downloadSpeed: string; uploadSpeed: string; uploadLength?: string; connections: string; dir: string; errorMessage?: string; errorCode?: string; seeder?: string; bittorrent?: { infoHash?: string; info?: { name?: string }; announceList?: string[][] }; info?: string; followedBy?: string[]; belongsTo?: string; files?: AriaFile[] }
+type AriaStatus = { gid: string; status: string; bitfield?: string; totalLength: string; completedLength: string; downloadSpeed: string; uploadSpeed: string; uploadLength?: string; connections: string; dir: string; errorMessage?: string; errorCode?: string; seeder?: string; bittorrent?: { infoHash?: string; info?: { name?: string }; announceList?: string[][] }; info?: string; followedBy?: string[]; belongsTo?: string; files?: AriaFile[] }
 type AriaPeer = { peerId: string; ip: string; port: string; bitfield: string; amChoking: string; peerChoking: string; downloadSpeed: string; uploadSpeed: string; seeder: string }
 
 // 带 cookies 时使用的 YouTube 客户端：web_embedded 可给到 4K（vp9/av01），对部分视频不可用时
@@ -1478,7 +1479,7 @@ class TorrentEngine {
     this.retryTimers.set(key, timer)
   }
 
-  private async refreshGid(gid: string, hash: string, callback?: (status: TorrentStatus) => void): Promise<AriaStatus> { const status = await this.rpc<AriaStatus>('tellStatus', [gid, ['gid', 'status', 'totalLength', 'completedLength', 'downloadSpeed', 'uploadSpeed', 'connections', 'dir', 'bittorrent', 'followedBy', 'belongsTo', 'files']]); this.gidHashes.set(gid, hash); if (callback) this.callbacks.set(hash, callback); this.applyStatus(hash, status); return status }
+  private async refreshGid(gid: string, hash: string, callback?: (status: TorrentStatus) => void): Promise<AriaStatus> { const status = await this.rpc<AriaStatus>('tellStatus', [gid, ['gid', 'status', 'bitfield', 'totalLength', 'completedLength', 'downloadSpeed', 'uploadSpeed', 'connections', 'dir', 'bittorrent', 'followedBy', 'belongsTo', 'files']]); this.gidHashes.set(gid, hash); if (callback) this.callbacks.set(hash, callback); this.applyStatus(hash, status); return status }
   private async findStatus(infoHash: string) { const hash = infoHash.toLowerCase(); const existing = this.statuses.get(hash); if (existing) return existing; await this.refreshStatuses(); const found = this.statuses.get(hash); if (!found) throw new Error('下载任务不存在'); return found }
   private toTorrentStatus(hash: string, status: AriaStatus): TorrentStatus {
     const task = this.taskSources.get(hash) || this.taskSources.get(hash.toLowerCase())
@@ -1530,7 +1531,32 @@ class TorrentEngine {
     if (!file) { response.writeHead(404, cors); response.end('File not found'); return }
     const path = resolve(file.path)
     if (!isWithinRoot(resolve(status.dir || this.dataDir), path)) { response.writeHead(403, cors); response.end(); return }
+    // 文件存在不代表请求的字节已经下载：稀疏文件在任一分片完成时就以完整长度出现，
+    // 直接返回 206 会让播放器以为数据就绪，随后解码失败（moov 还在没下到的尾部）
+    const availability = this.pieceAvailability(status, file, request.headers.range)
+    if (availability === 'missing') { response.writeHead(404, cors); response.end('Piece not ready'); return }
     this.serveFileRange(request, response, path, cors)
+  }
+
+  // 判断请求区间是否已下载：'ready' 可服务，'missing' 还没下到（调用方回 404 让播放器等），
+  // 'unknown' 没有 bitfield（非 BT 任务或已完成）时放行
+  private pieceAvailability(status: AriaStatus, file: AriaFile, rangeHeader?: string): 'ready' | 'missing' | 'unknown' {
+    const bitfield = status.bitfield
+    // 只有 BT 任务有 bitfield；已完成的文件无需检查
+    if (!bitfield || toNumber(file.completedLength) >= toNumber(file.length)) return 'unknown'
+    const pieceLength = pieceLengthFromBitfield(bitfield, toNumber(status.totalLength))
+    if (!pieceLength) return 'unknown'
+    const files = status.files || []
+    const fileOffset = files
+      .filter((item) => Number(item.index) < Number(file.index))
+      .reduce((sum, item) => sum + toNumber(item.length), 0)
+    const fileLength = toNumber(file.length)
+    const range = parseByteRange(rangeHeader, fileLength)
+    if (range.kind === 'empty') return 'ready'
+    // 非法范围交给下游处理（416）
+    if (range.kind === 'invalid') return 'ready'
+    const downloaded = isRangeDownloaded(bitfield, { pieceLength, fileOffset, fileLength, rangeStart: range.start, rangeEnd: range.end })
+    return downloaded ? 'ready' : 'missing'
   }
 
   // 字幕：srt 转 vtt 后整段返回（体积小，不做 Range）
