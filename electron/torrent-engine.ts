@@ -13,6 +13,7 @@ import { compatCommand, parseFfmpegProgress, parseMediaInfo, parseProbeJson, pla
 import { parseByteRange } from './http-range'
 import { buildBtTrackers, splitTrackers } from './tracker-merge'
 import { decideMetadataPhase } from './metadata-wait'
+import { filterMetadataPlaceholders, resolveTaskName, displayNameFromMagnet } from './torrent-display'
 import { buildRangeResponse, getMime, isAttachableSubtitle, isWithinRoot, parseStreamRoute, tokenMatches } from './stream-server'
 import { computeProgress, computeTimeRemaining, isFinished as isFinishedBytes, mapAriaState, retryDelayMs, selectFileIndexes } from './aria-status'
 import { extractEmbeddedCover } from './cover-art'
@@ -835,6 +836,8 @@ class TorrentEngine {
     if (!id.startsWith('magnet:?') && !isTorrentFile) throw new Error('请输入有效的磁力链接或 torrent 文件路径')
     // .torrent 自带 metadata：本地算出真实 infoHash，并用 pause 入库，等用户选择后再下载
     const hash = isTorrentFile ? torrentInfoHash(id) : infoHashFromMagnet(id)
+    // 磁力里的 dn= 是拿不到 metadata 时唯一可读的名称
+    const metadataName = isTorrentFile ? '' : displayNameFromMagnet(id)
     if (hash && this.statuses.has(hash)) {
       if (onStatus) this.callbacks.set(hash, onStatus)
       const existing = this.statuses.get(hash)!
@@ -846,14 +849,20 @@ class TorrentEngine {
     // bt-prioritize-piece：边下边播优化，head/tail 优先保证起播（MP4 的 moov 可能在尾部）
     const options = { ...this.seedOptions(), 'bt-tracker': resolveBtTrackers(id, isTorrentFile, this.trackerOverride), ...(this.streamPriority ? { 'bt-prioritize-piece': prioritizePieceOption() } : {}), ...(opts.dir ? { dir: opts.dir } : {}), ...(isTorrentFile ? { pause: 'true' } : { 'pause-metadata': 'true', 'bt-save-metadata': 'true' }) }
     const gid = await this.rpc<string>('addUri', [[id], options])
-    if (!isTorrentFile) this.metadataGids.add(gid)
+    if (!isTorrentFile) {
+      this.metadataGids.add(gid)
+      // metadata 本身就是一次下载：排在其它任务后面时可能长时间分不到连接，表现为一直「解析中」。
+      // 只对「排队中」的任务有意义：addUri 后立刻处于 active 时改位置会报 not found in the waiting queue
+      await this.rpc('changePosition', [gid, 0, 'POS_SET']).catch(() => undefined)
+    }
     const first = await this.refreshGid(gid, hash || gid, onStatus)
     const key = first.bittorrent?.infoHash?.toLowerCase() || hash || gid
     if (key !== gid) {
       this.gidHashes.set(gid, key)
       if (onStatus) this.callbacks.set(key, onStatus)
     }
-    this.taskSources.set(key, { source: id, done: false, type: 'bt', addedAt: Date.now() })
+    this.taskSources.set(key, { source: id, done: false, type: 'bt', addedAt: Date.now(), name: metadataName })
+    if (metadataName) this.taskNames.set(key, metadataName)
     this.persistTasks()
     if (isTorrentFile) return this.toTorrentStatus(key, first)
     if (opts.wait !== false) await this.waitForMetadata(key)
@@ -1465,8 +1474,15 @@ class TorrentEngine {
     const totalSize = toNumber(status.totalLength) || (status.files || []).reduce((sum, file) => sum + toNumber(file.length), 0)
     const downloaded = toNumber(status.completedLength)
     const downloadSpeed = toNumber(status.downloadSpeed)
-    const files = (status.files || []).map((file) => ({ name: relative(status.dir || this.dataDir, file.path) || basename(file.path), path: file.path, size: toNumber(file.length), completed: toNumber(file.completedLength), type: getFileType(file.path) }))
-    const name = status.bittorrent?.info?.name || this.taskNames.get(hash) || this.taskNames.get(hash.toLowerCase()) || status.info || hash
+    // [METADATA] 是 aria2 记录 metadata 下载进度的占位文件，展示出来会让用户误以为解析成功
+    const files = filterMetadataPlaceholders((status.files || []).map((file) => ({ name: relative(status.dir || this.dataDir, file.path) || basename(file.path), path: file.path, size: toNumber(file.length), completed: toNumber(file.completedLength), type: getFileType(file.path) })))
+    // 名字优先级：aria2 的 bt 名称 > 磁力 dn= > 已记录名称 > 哈希
+    const name = resolveTaskName({
+      btName: status.bittorrent?.info?.name,
+      magnet: task?.type === 'bt' ? task.source : undefined,
+      storedName: this.taskNames.get(hash) || this.taskNames.get(hash.toLowerCase()) || status.info,
+      hash
+    })
     // 磁力链接只对 BT 任务有意义：直链任务的 key 是 sha1(url)，不是 btih 哈希
     const magnetURI = type === 'bt' ? buildMagnetURI(hash, name, trackerList(this.trackerOverride).split(',')) : ''
     // 做种中（aria2 seeder=true 时状态仍是 active）：展示为「已完成」，否则会一直挂在「进行中」

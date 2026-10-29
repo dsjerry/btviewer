@@ -101,6 +101,26 @@ const TaskDetail: React.FC<DetailProps> = ({ torrent, busy, onAction }) => {
   )
 }
 
+// 解析中（拿 metadata）的卡片提示：冷门种子可能要几分钟，零 peer 时要告诉用户先确认资源本身
+const ParsingHint = memo<{ torrent: TorrentStatus }>(({ torrent }) => {
+  const [seconds, setSeconds] = useState(0)
+  // 只在解析中计时；拿不到 peer 的常见原因是资源已死或运营商限制 BT 入站
+  useEffect(() => {
+    if (torrent.status !== 'parsing') { setSeconds(0); return }
+    const started = Date.now()
+    const timer = window.setInterval(() => setSeconds(Math.round((Date.now() - started) / 1000)), 1000)
+    return () => window.clearInterval(timer)
+  }, [torrent.status, torrent.infoHash])
+  const stalled = seconds >= 45 && torrent.numPeers === 0
+  return (
+    <p className={`parsing-hint ${stalled ? 'is-stalled' : ''}`}>
+      {stalled
+        ? t('downloads.parsingNoPeers', { seconds })
+        : seconds >= 10 ? t('downloads.parsingWait', { seconds }) : t('downloads.parsingHint')}
+    </p>
+  )
+})
+
 interface CardProps {
   torrent: TorrentStatus
   busy: boolean
@@ -116,6 +136,7 @@ const DownloadCard = memo<CardProps>(({ torrent, busy, expanded, onSelect, onTog
     <div className="download-main"><div className={`download-status ${torrent.status}`}><span />{statusLabel(torrent.status)}</div><span className="task-type">{typeLabel(taskType(torrent))}</span><h3 title={torrent.name}>{torrent.name}</h3><button className="text-action" onClick={() => onToggle(torrent.infoHash)}>{expanded ? t('downloads.hideDetail') : t('downloads.detail')}</button><button className="text-action" onClick={() => onSelect(torrent)}>{t('downloads.viewFiles')}</button></div>
     <div className="big-progress"><span style={{ width: `${torrent.progress * 100}%` }} /></div>
     <div className="download-stats"><span><b>↓</b> {format(torrent.downloadSpeed, 'B/s')}</span>{taskType(torrent) === 'bt' && <span><b>↑</b> {format(torrent.uploadSpeed, 'B/s')}</span>}<span>{taskType(torrent) === 'bt' ? t('downloads.peers', { count: torrent.numPeers }) : t('downloads.connections', { count: torrent.numPeers })}</span><span>{format(torrent.downloaded)} / {format(torrent.totalSize)}</span>{torrent.status !== 'seeding' && <span>{t('downloads.remaining', { time: time(torrent.timeRemaining) })}</span>}{torrent.queuePosition !== undefined && <span>{t('downloads.queuePosition', { position: torrent.queuePosition + 1 })}</span>}</div>
+    {torrent.status === 'parsing' && <ParsingHint torrent={torrent} />}
     {torrent.error && <p className="task-error">{torrent.error}</p>}
     {expanded && <TaskDetail torrent={torrent} busy={busy} onAction={onAction} />}
     <div className="item-actions">
