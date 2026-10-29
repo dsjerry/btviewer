@@ -25,6 +25,17 @@ export function isPieceDownloaded(bitfield: string, index: number): boolean {
   return ((byte >> (7 - (index % 8))) & 1) === 1
 }
 
+// 已下载分片数（用于诊断与进度展示）
+export function countPieces(bitfield: string): number {
+  let count = 0
+  for (let i = 0; i < bitfield.length; i += 2) {
+    const byte = parseInt(bitfield.slice(i, i + 2), 16)
+    if (!Number.isFinite(byte)) continue
+    for (let bit = 0; bit < 8; bit++) if ((byte >> bit) & 1) count++
+  }
+  return count
+}
+
 export interface PieceIndexInfo {
   // 分片长度（由 bitfield 位数与总长度反推，见 pieceLengthFromBitfield）
   pieceLength: number

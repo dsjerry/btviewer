@@ -705,21 +705,33 @@ const Player: React.FC<PlayerProps> = ({ infoHash, file, subtitles, playlist, on
         // 本地媒体走 /local 注册路由；下载任务走 /stream（同一套 token 与 Range 行为）
         const streamUrl = file.localPath ? await ipc.getLocalMediaUrl(file.localPath) : await ipc.getStreamUrl(infoHash, file.path)
         if (!active) return
+        // 播放前必须确保任务真的在下载：媒体库里的任务可能处于「未开始/已暂停」状态
+        // （磁力解析完默认 pause-metadata，用户没有点过下载），此时流服务只会一直 404。
+        if (!file.localPath) {
+          await ipc.resumeTorrent(infoHash).catch(() => undefined)
+        }
         // 起播优先：先让引擎优先下载文件头尾（MP4 的 moov 可能在尾部），再等数据就绪
         prioritizeStream(0, 0)
-        // 边下边播：开头数据还没写盘时探测会 404，先等就绪再挂载（避免一次 404 就报错）。
+        // 边下边播：请求的字节还没下载时流服务返回 404，先等就绪再挂载（避免一次 404 就报错）。
         // 文案要说清「这是边下边播」，否则用户会以为是单独的下载任务在卡着。
         let waitedMs = 0
+        let resumed = false
         for (;;) {
           if (!active) return
           const state = await probeStream(streamUrl, controller.signal)
           if (!active) return
           if (state === 'ready') break
           if (state === 'failed') { setLoading(false); setError(t('player.streamError')); return }
+          // 等了一段时间还是 404：每 10 秒重新确保任务在跑（可能是刚被暂停，或添加后没真正开始）
+          if (!file.localPath && waitedMs > 0 && waitedMs % 10000 === 0) {
+            await ipc.resumeTorrent(infoHash).catch(() => undefined)
+            resumed = true
+          }
           setStatusText(waitedMs >= 8000 ? t('player.waitingDataLong', { seconds: Math.floor(waitedMs / 1000) }) : WAITING_TEXT)
           waitedMs += 2000
           await new Promise((resolve) => setTimeout(resolve, 2000))
         }
+        if (resumed) prioritizeStream(0, 0)
         if (!active) return
         setStatusText(t('player.preparing'))
         attach(streamUrl)

@@ -13,7 +13,7 @@ import { compatCommand, parseFfmpegProgress, parseMediaInfo, parseProbeJson, pla
 import { parseByteRange } from './http-range'
 import { buildBtTrackers, splitTrackers } from './tracker-merge'
 import { decideMetadataPhase } from './metadata-wait'
-import { isRangeDownloaded, pieceLengthFromBitfield } from './piece-availability'
+import { countPieces, isRangeDownloaded, pieceLengthFromBitfield } from './piece-availability'
 import { companionSubtitleIndexes, mergeSelectFileIndexes } from './file-selection'
 import { filterMetadataPlaceholders, resolveTaskName, displayNameFromMagnet } from './torrent-display'
 import { buildRangeResponse, getMime, isAttachableSubtitle, isWithinRoot, parseStreamRoute, tokenMatches } from './stream-server'
@@ -1534,29 +1534,48 @@ class TorrentEngine {
     // 文件存在不代表请求的字节已经下载：稀疏文件在任一分片完成时就以完整长度出现，
     // 直接返回 206 会让播放器以为数据就绪，随后解码失败（moov 还在没下到的尾部）
     const availability = this.pieceAvailability(status, file, request.headers.range)
-    if (availability === 'missing') { response.writeHead(404, cors); response.end('Piece not ready'); return }
+    if (availability.ready === false) {
+      // 诊断头：播放器控制台只看得到状态码，这里把「为什么还没就绪」和分片进度一起带出来
+      response.writeHead(404, {
+        ...cors,
+        'x-btv-reason': 'piece-not-ready',
+        'x-btv-piece-length': String(availability.pieceLength),
+        'x-btv-file-offset': String(availability.fileOffset),
+        'x-btv-range': request.headers.range || '',
+        'x-btv-progress': `${availability.downloadedPieces}/${availability.totalPieces}`,
+        'x-btv-file-progress': `${file.completedLength}/${file.length}`
+      })
+      response.end('Piece not ready')
+      return
+    }
     this.serveFileRange(request, response, path, cors)
   }
 
-  // 判断请求区间是否已下载：'ready' 可服务，'missing' 还没下到（调用方回 404 让播放器等），
-  // 'unknown' 没有 bitfield（非 BT 任务或已完成）时放行
-  private pieceAvailability(status: AriaStatus, file: AriaFile, rangeHeader?: string): 'ready' | 'missing' | 'unknown' {
+  // 判断请求区间是否已下载。BT 任务用 bitfield 精确判断；非 BT 或已完成时直接放行。
+  private pieceAvailability(status: AriaStatus, file: AriaFile, rangeHeader?: string): {
+    ready: boolean
+    pieceLength: number
+    fileOffset: number
+    downloadedPieces: number
+    totalPieces: number
+  } {
+    const unknown = { ready: true, pieceLength: 0, fileOffset: 0, downloadedPieces: 0, totalPieces: 0 }
     const bitfield = status.bitfield
-    // 只有 BT 任务有 bitfield；已完成的文件无需检查
-    if (!bitfield || toNumber(file.completedLength) >= toNumber(file.length)) return 'unknown'
+    if (!bitfield) return unknown
+    if (toNumber(file.completedLength) >= toNumber(file.length)) return unknown
     const pieceLength = pieceLengthFromBitfield(bitfield, toNumber(status.totalLength))
-    if (!pieceLength) return 'unknown'
+    if (!pieceLength) return unknown
     const files = status.files || []
     const fileOffset = files
       .filter((item) => Number(item.index) < Number(file.index))
       .reduce((sum, item) => sum + toNumber(item.length), 0)
     const fileLength = toNumber(file.length)
     const range = parseByteRange(rangeHeader, fileLength)
-    if (range.kind === 'empty') return 'ready'
-    // 非法范围交给下游处理（416）
-    if (range.kind === 'invalid') return 'ready'
-    const downloaded = isRangeDownloaded(bitfield, { pieceLength, fileOffset, fileLength, rangeStart: range.start, rangeEnd: range.end })
-    return downloaded ? 'ready' : 'missing'
+    const totalPieces = bitfield.length * 4
+    const downloadedPieces = countPieces(bitfield)
+    if (range.kind === 'empty' || range.kind === 'invalid') return { ...unknown, ready: true, pieceLength, fileOffset, downloadedPieces, totalPieces }
+    const ready = isRangeDownloaded(bitfield, { pieceLength, fileOffset, fileLength, rangeStart: range.start, rangeEnd: range.end })
+    return { ready, pieceLength, fileOffset, downloadedPieces, totalPieces }
   }
 
   // 字幕：srt 转 vtt 后整段返回（体积小，不做 Range）
