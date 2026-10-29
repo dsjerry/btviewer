@@ -1,0 +1,5 @@
+/* 字体本地内置：桌面应用不应依赖 Google Fonts CDN（离线可用，也不会被 CSP 拦截）*/
+@font-face{font-family:'DM Mono';font-style:normal;font-weight:400;font-display:swap;src:url('./fonts/DMMono-400.woff2') format('woff2')}
+@font-face{font-family:'DM Mono';font-style:normal;font-weight:500;font-display:swap;src:url('./fonts/DMMono-500.woff2') format('woff2')}
+/* Space Grotesk 是可变字体：一个文件覆盖 500-700，无需重复加载 */
+@font-face{font-family:'Space Grotesk';font-style:normal;font-weight:500 700;font-display:swap;src:url('./fonts/SpaceGrotesk-var.woff2') format('woff2')}

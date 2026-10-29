@@ -404,7 +404,7 @@ const MESSAGES: Record<string, [string, string]> = {
   'feeds.download': ['下载', 'Download'],
   'player.waitTimeout': ['等待数据超时，请确认任务仍在下载后重试', 'Timed out waiting for data — check that the task is still downloading, then retry'],
   'player.unsupportedContainer': ['{ext} 容器无法在内置播放器中解码，建议寻找 MP4 / H.264 版本', 'The {ext} container cannot be decoded by the built-in player — look for an MP4 / H.264 release'],
-  'player.unsupportedCodec': ['当前格式或编码不受支持，建议使用 MP4 / H.264 资源', 'This format or codec is unsupported — prefer MP4 / H.264 sources'],
+  'player.unsupportedCodec': ['数据已经下载到本地，但内置播放器无法解码当前容器或编码（常见于 MKV 内的 H.265 / AC3 / DTS）。点「兼容播放」可自动转封装或转码', 'The data is already on disk but the built-in player cannot decode this container or codec (common with HEVC/AC3/DTS inside MKV). Use “Compatible playback” to remux or transcode'],
   'player.streamError': ['媒体流服务异常，请返回后重试', 'The media stream failed — go back and try again'],
   'player.initFailed': ['播放器初始化失败', 'Could not initialise the player'],
   'player.noCompatUrl': ['无法获取转码文件地址', 'Could not get the transcoded file address'],

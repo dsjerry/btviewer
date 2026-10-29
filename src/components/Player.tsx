@@ -34,15 +34,12 @@ const MIME: Record<string, string> = {
 }
 // 控制条 UI 的中文文案（video.js 内置菜单默认是英文）
 videojs.addLanguage('zh-CN', { Subtitles: '字幕', Captions: '字幕', 'subtitles off': '关闭字幕', 'captions off': '关闭字幕', off: '关闭', 'Restore Language': '恢复默认语言' })
-// Chromium 无法解码的常见容器：重试没有意义，直接提示
-const UNSUPPORTED = ['.mkv', '.avi', '.wmv', '.flv', '.rmvb', '.ts']
 // 球面拖拽灵敏度：按视场角 1:1 折算后再乘系数。1:1「抓住世界」在宽视野下轻轻一带
 // 画面就大幅摆动（全屏宽 = 120°+），0.25× 与常见 VR 播放器的从容手感一致
 const STEREO_DRAG_SENSITIVITY = 0.25
 
 function getMime(name: string) { return MIME[name.toLowerCase().slice(name.lastIndexOf('.'))] || 'application/octet-stream' }
 
-function isUnsupported(name: string) { return UNSUPPORTED.includes(name.toLowerCase().slice(name.lastIndexOf('.'))) }
 
 // 音量/倍速全局记忆：跨任务、跨集沿用上次的设置
 const VOLUME_KEY = 'btviewer-volume'
@@ -620,30 +617,40 @@ const Player: React.FC<PlayerProps> = ({ infoHash, file, subtitles, playlist, on
           addBeforeFullscreen(pipButton)
         }
       } catch { /* 控制条结构变化时按钮缺失不影响播放 */ }
+      // 播放失败要区分两件事，否则「数据还没下载」会被误报成「格式不支持」：
+      //   · 流服务仍返回 404 → 文件还没落盘，继续等（MKV 等容器同样适用，不能一上来就判死）
+      //   · 流服务已经 200/206 但 Chromium 仍报错 → 才是真的容器/编码不支持
+      let recovering = false
       player.on('error', () => {
-        if (!active) return
-        const code = player.error()?.code
-        // 数据未下载完整时 Chromium 报网络/源错误（2/4），等更多数据到位后重新挂载
-        if ((code === 2 || code === 4) && !isUnsupported(file.name)) {
-          setStatusText(WAITING_TEXT)
-          setLoading(true)
-          void (async () => {
-            for (let attempt = 0; active && attempt < 100; attempt++) {
-              await new Promise((resolve) => setTimeout(resolve, 3000))
+        if (!active || recovering) return
+        recovering = true
+        void (async () => {
+          try {
+            const deadline = Date.now() + 300_000
+            while (active && Date.now() < deadline) {
+              const state = await probeStream(streamUrl, controller.signal)
               if (!active) return
-              if (await probeStream(streamUrl, controller.signal) === 'ready') {
-                if (!active) return
-                player.src(source)
-                player.load()
+              // 数据已就绪却仍然报错：这次真的是解码问题，交给兼容播放
+              if (state === 'ready') {
+                setLoading(false)
+                setError(t('player.unsupportedCodec'))
                 return
               }
+              if (state === 'failed') { setLoading(false); setError(t('player.streamError')); return }
+              setStatusText(WAITING_TEXT)
+              setLoading(true)
+              await new Promise((resolve) => setTimeout(resolve, 3000))
             }
             if (active) { setLoading(false); setError(t('player.waitTimeout')) }
-          })()
-        } else {
-          setLoading(false)
-          setError(isUnsupported(file.name) ? `${file.name.slice(file.name.lastIndexOf('.'))} 容器无法在内置播放器中解码，建议寻找 MP4 / H.264 版本` : t('player.unsupportedCodec'))
-        }
+          } finally {
+            recovering = false
+            // 数据到位后重新挂载：此时才真正尝试解码
+            if (active && !player.isDisposed()) {
+              player.src(source)
+              player.load()
+            }
+          }
+        })()
       })
       // 观看进度：节流保存 + 暂停时保存，元数据就绪后恢复上次位置
       player.on('timeupdate', () => { const now = Date.now(); if (now - lastSaveRef.current < 5000) return; lastSaveRef.current = now; saveProgress() })
