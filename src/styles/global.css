@@ -120,7 +120,7 @@ html[data-theme='light'] .log-line.warn,html[data-theme='light'] .log-line.warn 
 .settings-textarea:focus{border-color:var(--border-focus)}
 /* 设置页：即时校验错误态 */
 .settings-row input.has-error,.settings-textarea.has-error{border-color:var(--border-error)}
-.field-error{margin:8px 0 0;color:var(--error);font-size:12px}.field-hint{color:var(--text-dim2);font-size:12px}
+.field-error{margin:8px 0 0;color:var(--error);font-size:12px}.field-hint{color:var(--text-dim2);font-size:12px}.file-item.is-unselected{opacity:.55}.file-unselected-tag{flex:none;padding:1px 6px;color:var(--text-dim2);border:1px solid var(--border-soft);border-radius:3px;font-size:10px}
 /* 设置页：开关行（托盘/自启） */
 .settings-check{display:flex;align-items:center;gap:9px;margin:0 0 10px;color:var(--text-soft);font-size:13px;cursor:pointer}.settings-check-group{display:grid;gap:2px;margin:12px 0 18px}.settings-check-group .settings-check{margin:0}
 .settings-check:last-child{margin-bottom:0}

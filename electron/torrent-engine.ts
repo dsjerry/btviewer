@@ -1487,7 +1487,8 @@ class TorrentEngine {
     const downloaded = toNumber(status.completedLength)
     const downloadSpeed = toNumber(status.downloadSpeed)
     // [METADATA] 是 aria2 记录 metadata 下载进度的占位文件，展示出来会让用户误以为解析成功
-    const files = filterMetadataPlaceholders((status.files || []).map((file) => ({ name: relative(status.dir || this.dataDir, file.path) || basename(file.path), path: file.path, size: toNumber(file.length), completed: toNumber(file.completedLength), type: getFileType(file.path) })))
+    // selected 来自 aria2（changeOption 改 select-file 后同步更新）：媒体库据此默认只显示勾选的文件
+    const files = filterMetadataPlaceholders((status.files || []).map((file) => ({ name: relative(status.dir || this.dataDir, file.path) || basename(file.path), path: file.path, size: toNumber(file.length), completed: toNumber(file.completedLength), type: getFileType(file.path), selected: file.selected !== 'false' })))
     // 名字优先级：aria2 的 bt 名称 > 磁力 dn= > 已记录名称 > 哈希
     const name = resolveTaskName({
       btName: status.bittorrent?.info?.name,

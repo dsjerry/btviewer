@@ -63,5 +63,5 @@ export function mergeStatusUpdate(current: TorrentStatus[], status: TorrentStatu
 
 // 文件行 memo 的比较器用：只比较影响渲染的字段
 export function sameTorrentFile(a: TorrentFileInfo, b: TorrentFileInfo): boolean {
-  return a === b || (a.path === b.path && a.completed === b.completed && a.size === b.size && a.name === b.name)
+  return a === b || (a.path === b.path && a.completed === b.completed && a.size === b.size && a.name === b.name && a.selected === b.selected)
 }

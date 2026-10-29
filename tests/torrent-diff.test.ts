@@ -74,6 +74,14 @@ describe('sameTorrentList', () => {
   })
 })
 
+describe('sameTorrentFile 与 selected', () => {
+  it('勾选状态变化需要重渲染', () => {
+    const file = { name: 'a.mkv', path: '/dl/a.mkv', size: 800, completed: 400, type: 'video' as const, selected: true }
+    expect(sameTorrentFile(file, { ...file })).toBe(true)
+    expect(sameTorrentFile(file, { ...file, selected: false })).toBe(false)
+  })
+})
+
 describe('sameTorrentFile', () => {
   it('只比较影响渲染的字段', () => {
     const file = { name: 'a.mkv', path: '/dl/a.mkv', size: 800, completed: 400, type: 'video' as const }

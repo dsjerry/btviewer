@@ -130,8 +130,9 @@ interface FileRowProps { infoHash: string; file: TorrentFileInfo; onPlayFile: (f
 // 文件行 memo：状态每秒刷新会重建 files 数组，内容相同的行直接跳过重渲染
 const FileRow = memo<FileRowProps>(({ infoHash, file, onPlayFile }) => {
   const percent = file.size ? Math.min(100, Math.round((file.completed / file.size) * 100)) : 0
-  return <div className="file-item"><div className="file-name">{parseEpisode(file.name) && <span className="file-episode" title="识别到的季集">{episodeLabel(parseEpisode(file.name))}</span>}{file.type === 'video' ? <VideoThumb infoHash={infoHash} file={file} className="file-icon video" fallback="▶" /> : <span className={`file-icon ${file.type}`}>{icons[file.type]}</span>}<strong title={file.name}>{file.name}</strong></div><span className="file-progress"><span className="bar"><span style={{ width: `${percent}%` }} /></span><small>{percent}%</small></span><span className="file-type">{fileTypeLabel(file.type)}</span><span className="file-size">{formatSize(file.size)}</span>{file.type === 'video' || file.type === 'audio' ? <button className="play-button" onClick={() => onPlayFile(file)}>播放 <span>↗</span></button> : <span />}</div>
-}, (a, b) => a.infoHash === b.infoHash && a.onPlayFile === b.onPlayFile && sameTorrentFile(a.file, b.file))
+  const unselected = file.selected === false
+  return <div className={`file-item ${unselected ? 'is-unselected' : ''}`}><div className="file-name">{unselected && <span className="file-unselected-tag">{t('library.notSelected')}</span>}{parseEpisode(file.name) && <span className="file-episode" title="识别到的季集">{episodeLabel(parseEpisode(file.name))}</span>}{file.type === 'video' ? <VideoThumb infoHash={infoHash} file={file} className="file-icon video" fallback="▶" /> : <span className={`file-icon ${file.type}`}>{icons[file.type]}</span>}<strong title={file.name}>{file.name}</strong></div><span className="file-progress"><span className="bar"><span style={{ width: `${percent}%` }} /></span><small>{percent}%</small></span><span className="file-type">{fileTypeLabel(file.type)}</span><span className="file-size">{formatSize(file.size)}</span>{file.type === 'video' || file.type === 'audio' ? <button className="play-button" onClick={() => onPlayFile(file)}>播放 <span>↗</span></button> : <span />}</div>
+}, (a, b) => a.infoHash === b.infoHash && a.onPlayFile === b.onPlayFile && sameTorrentFile(a.file, b.file) && a.file.selected === b.file.selected)
 
 const FileList: React.FC<FileListProps> = ({ torrent, torrents, onSelectTorrent, onPlayFile, onResumeTorrent, onRemove, onBack, localLibrary, onImportLocal, onPlayLocalFile, onRemoveLocal, onRefreshLocal }) => {
   const [query, setQuery] = useState('')
@@ -150,7 +151,16 @@ const FileList: React.FC<FileListProps> = ({ torrent, torrents, onSelectTorrent,
   const copyText = async (text: string) => {
     try { await navigator.clipboard.writeText(text); setCopied(true); window.setTimeout(() => setCopied(false), 2000) } catch { setCopied(false) }
   }
-  const files = useMemo(() => torrent?.files.filter((file) => file.name.toLowerCase().includes(query.toLowerCase())) ?? [], [torrent, query])
+  // 默认只显示勾选下载的文件：种子里的其它文件（花絮、其他语言音轨等）折叠起来，避免看起来「全都下了」
+  const [showAllFiles, setShowAllFiles] = useState(false)
+  const selectedCount = useMemo(() => torrent?.files.filter((file) => file.selected !== false).length ?? 0, [torrent])
+  const hiddenCount = (torrent?.files.length ?? 0) - selectedCount
+  const files = useMemo(() => {
+    const list = torrent?.files ?? []
+    return list
+      .filter((file) => (showAllFiles ? true : file.selected !== false))
+      .filter((file) => file.name.toLowerCase().includes(query.toLowerCase()))
+  }, [torrent, query, showAllFiles])
 
   // 观看进度：按 infoHash 汇总，用于列表页展示「看到哪」；播放器返回会重新挂载本组件，进度随之刷新
   const [watchMap, setWatchMap] = useState<Record<string, WatchProgress | null>>({})
@@ -402,7 +412,15 @@ const FileList: React.FC<FileListProps> = ({ torrent, torrents, onSelectTorrent,
         <button className="small-button" onClick={removeKeep}>{t('library.removeRecord')}</button>
         <button className="small-button danger" onClick={removeWithFiles}>{t('library.deleteTask')}</button>
       </div>
-      <div className="library-tools"><label className="search-box"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t('library.searchFiles')} /></label><span>{files.length} / {torrent.files.length}</span></div>
+      <div className="library-tools">
+        <label className="search-box"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t('library.searchFiles')} /></label>
+        <span>{t('library.selectedFiles', { selected: files.filter((file) => file.selected !== false).length, total: files.length })}</span>
+        {hiddenCount > 0 && (
+          <button className="text-action" onClick={() => setShowAllFiles((value) => !value)}>
+            {showAllFiles ? t('library.hideUnselected', { count: hiddenCount }) : t('library.showUnselected', { count: hiddenCount })}
+          </button>
+        )}
+      </div>
       {!torrent.files.length
         ? <div className="empty-state"><span>◌</span><strong>{t('library.waitingFiles')}</strong><p>{t('library.waitingFilesHint')}</p></div>
         : !files.length

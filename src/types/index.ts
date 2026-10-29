@@ -5,6 +5,8 @@ export interface TorrentFileInfo {
   // 已下载字节数（任务进行中会随状态刷新增长），用于单文件进度展示
   completed: number
   type: 'video' | 'audio' | 'subtitle' | 'other'
+  // 该文件是否被选中下载（aria2 的 select-file）。缺省视为已选，兼容旧的任务记录
+  selected?: boolean
   // 本地媒体（不经下载任务，直接播放磁盘文件）：值为文件绝对路径，播放器据此走流服务的 /local 路由
   localPath?: string
 }
