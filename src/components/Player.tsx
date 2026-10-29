@@ -700,14 +700,17 @@ const Player: React.FC<PlayerProps> = ({ infoHash, file, subtitles, playlist, on
         if (!active) return
         // 起播优先：先让引擎优先下载文件头尾（MP4 的 moov 可能在尾部），再等数据就绪
         prioritizeStream(0, 0)
-        // 按需下载场景：开头数据可能还没写盘，探测就绪后再挂载，避免一次 404 就报错
+        // 边下边播：开头数据还没写盘时探测会 404，先等就绪再挂载（避免一次 404 就报错）。
+        // 文案要说清「这是边下边播」，否则用户会以为是单独的下载任务在卡着。
+        let waitedMs = 0
         for (;;) {
           if (!active) return
           const state = await probeStream(streamUrl, controller.signal)
           if (!active) return
           if (state === 'ready') break
           if (state === 'failed') { setLoading(false); setError(t('player.streamError')); return }
-          setStatusText(WAITING_TEXT)
+          setStatusText(waitedMs >= 8000 ? t('player.waitingDataLong', { seconds: Math.floor(waitedMs / 1000) }) : WAITING_TEXT)
+          waitedMs += 2000
           await new Promise((resolve) => setTimeout(resolve, 2000))
         }
         if (!active) return

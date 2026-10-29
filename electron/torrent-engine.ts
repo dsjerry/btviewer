@@ -13,6 +13,7 @@ import { compatCommand, parseFfmpegProgress, parseMediaInfo, parseProbeJson, pla
 import { parseByteRange } from './http-range'
 import { buildBtTrackers, splitTrackers } from './tracker-merge'
 import { decideMetadataPhase } from './metadata-wait'
+import { companionSubtitleIndexes, mergeSelectFileIndexes } from './file-selection'
 import { filterMetadataPlaceholders, resolveTaskName, displayNameFromMagnet } from './torrent-display'
 import { buildRangeResponse, getMime, isAttachableSubtitle, isWithinRoot, parseStreamRoute, tokenMatches } from './stream-server'
 import { computeProgress, computeTimeRemaining, isFinished as isFinishedBytes, mapAriaState, retryDelayMs, selectFileIndexes } from './aria-status'
@@ -913,19 +914,30 @@ class TorrentEngine {
       if (!this.videoProcs.has(status.gid) && status.status !== 'complete' && status.status !== 'error') this.startVideoDownload(status.gid, task.source, status.dir || this.dataDir)
       return
     }
-    // 命中的可能是 metadata 父任务（complete、由后续任务接管展示）：转而操作真正的下载任务
+    // 可能是 metadata 父任务（complete、由后续任务接管展示）：先拿到真实文件列表再判断
     if (status.followedBy?.length) status = await this.refreshGid(status.followedBy[0], infoHash.toLowerCase())
+    await this.startSelectedFiles(infoHash, status.gid, filePaths)
+  }
+
+  // 按选中文件开始下载。aria2 的 select-file 控制「哪些文件参与下载」，未选中的文件不会写盘；
+  // 但列表里仍会显示全部文件（这是 aria2 的 tellsStatus 行为，不是把全部内容都拖下来了）。
+  private async startSelectedFiles(infoHash: string, gid: string, filePaths?: string[]) {
+    const status = await this.refreshGid(gid, infoHash)
     const files = status.files || []
     if (!files.length) throw new Error('种子文件信息尚未准备完成')
     const indexes = selectFileIndexes(files, filePaths, basename)
     if (filePaths?.length && !indexes.length) throw new Error('未找到指定的媒体文件')
     // 已完成的任务无需也无法再改选项，文件本身已在磁盘上
     if (status.status !== 'complete') {
-      await this.rpc('changeOption', [status.gid, { 'select-file': indexes.join(',') }])
+      // 播放单个文件时，把同目录同名的字幕一起选中，边下边播能立刻用上字幕
+      const extras = filePaths?.length === 1
+        ? companionSubtitleIndexes(files.map((file) => ({ index: file.index, path: file.path, type: getFileType(file.path) })), filePaths[0])
+        : []
+      await this.rpc('changeOption', [gid, { 'select-file': mergeSelectFileIndexes(indexes, extras) }])
       // changeOption 的 pause 选项不会解除暂停，必须显式 unpause
-      await this.rpc('unpause', [status.gid]).catch(() => undefined)
+      await this.rpc('unpause', [gid]).catch(() => undefined)
     }
-    await this.refreshGid(status.gid, infoHash)
+    await this.refreshGid(gid, infoHash)
   }
 
   // ── 做种策略（A5）──────────────────────────────────────────────
@@ -1600,4 +1612,4 @@ class TorrentEngine {
   }
 }
 export const torrentEngine = new TorrentEngine()
-export { buildMagnetURI, getFileType, infoHashFromMagnet, isUnderRoot, parseMetalink, srtToVtt, stableKey, torrentInfoHash, trackerList }
+export { buildMagnetURI, getFileType, infoHashFromMagnet, isUnderRoot, parseMetalink, srtToVtt, stableKey, torrentInfoHash, trackerList, companionSubtitleIndexes, mergeSelectFileIndexes }
