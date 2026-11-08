@@ -20,7 +20,17 @@ jobs:
         with:
           node-version: 20
           cache: npm
-      - run: npm ci
+      # Electron 的 postinstall 要从 GitHub CDN 拉 ~100MB 二进制，偶发 502/504 直接炸掉 npm ci；
+      # 退避重试 3 次。Windows 上 run 默认是 pwsh，指定 bash 统一语法
+      - name: npm ci（含重试）
+        shell: bash
+        run: |
+          for i in 1 2 3; do
+            npm ci && exit 0
+            if [ "$i" -lt 3 ]; then sleep $((i * 30)); fi
+          done
+          echo "::error::npm ci 连续 3 次失败（多为 Electron 二进制下载 502/504）"
+          exit 1
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test
@@ -50,6 +60,15 @@ jobs:
           # 冒烟脚本用内置 WebSocket 连 CDP，该全局对象从 Node 22 起才默认可用（Node 20 需 --experimental-websocket）
           node-version: 22
           cache: npm
-      - run: npm ci
+      # 同 verify：Electron 二进制下载偶发 502/504，重试 3 次
+      - name: npm ci（含重试）
+        shell: bash
+        run: |
+          for i in 1 2 3; do
+            npm ci && exit 0
+            if [ "$i" -lt 3 ]; then sleep $((i * 30)); fi
+          done
+          echo "::error::npm ci 连续 3 次失败（多为 Electron 二进制下载 502/504）"
+          exit 1
       - run: npm run build
       - run: npm run smoke
