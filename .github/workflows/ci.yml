@@ -11,7 +11,8 @@ jobs:
       # mac 也要跑：平台分支（二进制解析、登录项、菜单）只有对应 runner 才覆盖得到
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest, macos-14]
+        # macos-14 镜像已于 2026-11 退役（runner-images#13518），用 macos-15（同样 arm64）
+        os: [windows-latest, ubuntu-latest, macos-15]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4

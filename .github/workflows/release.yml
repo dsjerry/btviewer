@@ -28,7 +28,7 @@ jobs:
             args: --win
           - os: ubuntu-latest
             args: --linux
-          - os: macos-14
+          - os: macos-15
             args: --mac --arm64
     runs-on: ${{ matrix.os }}
     # 签名/公证凭据当 secrets 注入：没配时 electron-builder 自动跳过，包照样产出（用户需手动放行）
