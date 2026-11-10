@@ -80,7 +80,7 @@ const electronAPI: ElectronAPI = {
   pickLocalMedia: () => ipcRenderer.invoke('local:pick'),
   addLocalMedia: (paths: string[]) => ipcRenderer.invoke('local:add-paths', paths),
   localList: () => ipcRenderer.invoke('local:list'),
-  removeLocalMedia: (path: string) => ipcRenderer.invoke('local:remove', path),
+  removeLocalMedia: (path: string, deleteFile = false) => ipcRenderer.invoke('local:remove', path, deleteFile),
   getLocalMediaUrl: (localPath: string) => ipcRenderer.invoke('local:media-url', localPath),
   getLocalSubtitles: (videoPath: string) => ipcRenderer.invoke('local:subtitles', videoPath),
   pickDownloadDir: () => ipcRenderer.invoke('dialog:pick-download-dir'),

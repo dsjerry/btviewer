@@ -881,9 +881,13 @@ function setupIPC() {
   // 媒体库的本地视频引用列表（missing 现查，供「文件不存在」态展示）
   ipcMain.handle('local:list', () => ({ success: true, data: listLocalMedia() }))
 
-  // 移除引用（只删记录，不动磁盘文件）
-  ipcMain.handle('local:remove', (_event, path: string) => {
-    return { success: true, data: removeLocalMedia(String(path)) }
+  // 移除引用；deleteFile=true 时连磁盘文件一起删（移入系统回收站），失败返回 error 交给 UI 提示
+  ipcMain.handle('local:remove', async (_event, path: string, deleteFile = false) => {
+    try {
+      return { success: true, data: await removeLocalMedia(String(path), Boolean(deleteFile)) }
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) }
+    }
   })
 
   // 本地媒体流地址：登记进流服务注册表，返回带 token 的 /local/<id> 地址（与 /stream 同一套鉴权与 Range）

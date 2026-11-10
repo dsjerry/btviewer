@@ -4,6 +4,7 @@ import { ipc } from '../services/ipc'
 import { formatSize, localEntryToFile, statusLabel, taskType, typeLabel, watchLabel, watchPercent } from '../services/task-meta'
 import { episodeLabel, parseEpisode, type EpisodeTag } from '../services/episode'
 import { t } from '../services/i18n'
+import { ConfirmDialog } from './ConfirmDialog'
 import type { LocalMediaEntry, TorrentFileInfo, TorrentStatus, WatchProgress } from '../types'
 import { LOCAL_MEDIA_HASH } from '../types'
 import getThumbnail from '../services/thumbnail'
@@ -20,7 +21,8 @@ interface FileListProps {
   localLibrary: LocalMediaEntry[]
   onImportLocal: () => void
   onPlayLocalFile: (entry: LocalMediaEntry) => void
-  onRemoveLocal: (entry: LocalMediaEntry) => void
+  // deleteFile=true 时连磁盘文件一起删（移入系统回收站），由确认弹窗勾选
+  onRemoveLocal: (entry: LocalMediaEntry, deleteFile?: boolean) => void
   onRefreshLocal: () => void
 }
 type SortKey = 'added' | 'name' | 'size' | 'watched'
@@ -139,6 +141,13 @@ const FileList: React.FC<FileListProps> = ({ torrent, torrents, onSelectTorrent,
   const [copied, setCopied] = useState(false)
   // 本地引用的 missing 状态要现查（移动硬盘可能已挂载/拔出）：挂载时刷一次
   useEffect(() => { onRefreshLocal() }, [onRefreshLocal])
+  // 移除确认：先弹窗，勾选「同时删除本地文件」才删盘（BT 任务传 destroy，本地引用传 deleteFile）
+  const [pending, setPending] = useState<{ kind: 'task'; item: TorrentStatus } | { kind: 'local'; entry: LocalMediaEntry } | null>(null)
+  const confirmRemove = (destroy: boolean) => {
+    if (pending?.kind === 'task') onRemove(pending.item, destroy)
+    if (pending?.kind === 'local') onRemoveLocal(pending.entry, destroy)
+    setPending(null)
+  }
   // 媒体库视图：卡片网格 / 紧凑列表，偏好持久化
   const [view, setView] = useState<'grid' | 'list'>(() => (localStorage.getItem('btviewer-library-view') === 'list' ? 'list' : 'grid'))
   const changeView = (mode: 'grid' | 'list') => { setView(mode); localStorage.setItem('btviewer-library-view', mode) }
@@ -195,7 +204,7 @@ const FileList: React.FC<FileListProps> = ({ torrent, torrents, onSelectTorrent,
   }, [localWatchKey, localLibrary])
 
   // 库列表：网格 / 紧凑列表共用同一份数据与移除确认逻辑
-  const confirmRemove = (item: TorrentStatus) => { if (window.confirm(t('library.removeConfirm', { name: item.name }))) onRemove(item, false) }
+  const confirmRemoveCard = (item: TorrentStatus) => setPending({ kind: 'task', item })
   const localSection = localLibrary.length > 0 && (
     <div className="local-library">
       <div className="library-section-head"><span>{t('library.localSection')}</span><small>{localLibrary.length}</small></div>
@@ -214,7 +223,7 @@ const FileList: React.FC<FileListProps> = ({ torrent, torrents, onSelectTorrent,
                 progress={watchPercent(watch)}
                 meta={<span title={entry.path}>{formatSize(entry.size)}</span>}
                 onClick={() => { if (!entry.missing) onPlayLocalFile(entry) }}
-                onRemove={() => onRemoveLocal(entry)}
+                onRemove={() => setPending({ kind: 'local', entry })}
                 removeTitle={t('library.removeRecord')}
               />
             )
@@ -235,7 +244,7 @@ const FileList: React.FC<FileListProps> = ({ torrent, torrents, onSelectTorrent,
                 progress={watchPercent(watch)}
                 trailing={<WatchBadge watch={watch} />}
                 onClick={() => { if (!entry.missing) onPlayLocalFile(entry) }}
-                onRemove={() => onRemoveLocal(entry)}
+                onRemove={() => setPending({ kind: 'local', entry })}
                 removeTitle={t('library.removeRecord')}
               />
             )
@@ -363,7 +372,7 @@ const FileList: React.FC<FileListProps> = ({ torrent, torrents, onSelectTorrent,
                   progress={watchPercent(watch)}
                   meta={metaLine(item)}
                   onClick={() => onSelectTorrent(item)}
-                  onRemove={() => confirmRemove(item)}
+                  onRemove={() => confirmRemoveCard(item)}
                   removeTitle={t('downloads.remove')}
                 />
               )
@@ -379,12 +388,19 @@ const FileList: React.FC<FileListProps> = ({ torrent, torrents, onSelectTorrent,
                   progress={watchPercent(watch)}
                   trailing={<WatchBadge watch={watch} />}
                   onClick={() => onSelectTorrent(item)}
-                  onRemove={() => confirmRemove(item)}
+                  onRemove={() => confirmRemoveCard(item)}
                   removeTitle={t('downloads.remove')}
                 />
               )
             })}</div>}
         {localSection}
+        <ConfirmDialog
+          open={!!pending}
+          message={pending?.kind === 'task' ? t('library.removeConfirm', { name: pending.item.name }) : pending ? t('library.removeLocalConfirm', { name: pending.entry.name }) : ''}
+          checkboxLabel={t('confirm.removeWithFiles')}
+          onConfirm={confirmRemove}
+          onCancel={() => setPending(null)}
+        />
       </div>
     )
   }

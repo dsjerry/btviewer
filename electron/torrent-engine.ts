@@ -1,7 +1,7 @@
 import { spawn, execFile, type ChildProcessWithoutNullStreams } from 'child_process'
 import { createReadStream, existsSync, mkdirSync, readFileSync, readdirSync, rmdirSync, rmSync, statSync } from 'fs'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'http'
-import { app } from 'electron'
+import { app, shell } from 'electron'
 import { join, basename, dirname, relative, resolve } from 'path'
 import { createHash, randomBytes } from 'crypto'
 import { XMLParser } from 'fast-xml-parser'
@@ -815,7 +815,7 @@ class TorrentEngine {
     }
   }
 
-  private removeVideo(key: string, destroy: boolean) {
+  private async removeVideo(key: string, destroy: boolean) {
     const child = this.videoProcs.get(key)
     if (child) { child.kill(); this.videoProcs.delete(key) }
     const status = this.statuses.get(key)
@@ -825,9 +825,9 @@ class TorrentEngine {
     this.taskNames.delete(key)
     this.persistTasks()
     if (destroy && status) {
-      this.removeTaskFiles(status)
+      await this.removeTaskFiles(status)
       // yt-dlp 的 .part 续传文件一并清理
-      for (const file of status.files || []) { try { rmSync(`${file.path}.part`, { force: true }) } catch { /* 清理失败不影响移除 */ } }
+      for (const file of status.files || []) await this.trashFile(`${file.path}.part`)
     }
   }
 
@@ -1308,16 +1308,22 @@ class TorrentEngine {
     this.persistTasks()
     this.removeCompatFilesFor(hash)
     for (const gid of gids) this.gidHashes.delete(gid)
-    if (destroy) this.removeTaskFiles(status)
+    if (destroy) await this.removeTaskFiles(status)
   }
 
-  private removeTaskFiles(status: AriaStatus) {
-    const root = resolve(this.dataDir)
+  // 删除单个文件：优先移入系统回收站（误删可恢复），回收站失败（如网络盘）再直接删
+  private async trashFile(path: string) {
+    try { await shell.trashItem(path) } catch { try { rmSync(path, { force: true }) } catch { /* 单个文件清理失败不阻断其余 */ } }
+  }
+
+  private async removeTaskFiles(status: AriaStatus) {
+    // 守卫根用任务自己的保存目录：文件都落在这之下；this.dataDir 可能因启动后改过下载目录而与实际不符
+    const root = resolve(status.dir || this.effectiveDownloadDir())
     const dirs = new Set<string>()
     for (const file of status.files || []) {
       const path = resolve(file.path)
       if (!isUnderRoot(root, path)) continue
-      try { rmSync(path, { force: true }) } catch { /* 单个文件删除失败时继续清理其余文件 */ }
+      await this.trashFile(path)
       dirs.add(dirname(path))
     }
     for (const dir of dirs) {

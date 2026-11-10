@@ -512,3 +512,12 @@ html[data-theme='light'] .download-status.parsing span{background:#8a6d1f}
 .record-badge{top:22px;left:22px;padding:7px 12px;border:1px solid rgba(255,138,125,.28);border-radius:7px;background:rgba(15,17,17,.82);box-shadow:0 8px 24px rgba(0,0,0,.26);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
 @media(max-width:900px){.player-header{gap:10px;padding-inline:16px}.player-header .back-link{padding:8px}.player-heading{gap:9px}.player-heading h2{font-size:13px}.playlist-controls{gap:4px}.playlist-button{min-width:32px;padding-inline:7px}.player-stage{padding:16px}}
 @media(max-height:560px){.player-header{min-height:64px;padding-block:8px}.player-heading .file-icon{width:30px;height:30px}.player-stage{padding-block:12px}}
+
+/* 确认弹窗（ConfirmDialog）：删除确认等带选项的模态确认 */
+.confirm-overlay{position:fixed;inset:0;z-index:80;display:grid;place-items:center;background:rgba(0,0,0,.45);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px)}
+.confirm-dialog{width:min(420px,calc(100vw - 48px));padding:22px;background:var(--bg-card);border:1px solid var(--border-card-strong);box-shadow:15px 15px 0 var(--shadow-card)}
+.confirm-message{margin:0;color:var(--text);font-size:14px;line-height:1.55;white-space:pre-line}
+.confirm-checkbox{display:flex;gap:9px;align-items:center;margin-top:16px;color:var(--text-secondary);font-size:13px;cursor:pointer}
+.confirm-checkbox input{accent-color:var(--accent)}
+.confirm-checkbox:hover{color:var(--text)}
+.confirm-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:20px}

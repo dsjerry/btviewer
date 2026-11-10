@@ -2,7 +2,7 @@
 // 持久化到 userData/local-media.json。播放、字幕扫描、兼容转码都按路径走流服务的 /local 路由。
 import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
-import { app } from 'electron'
+import { app, shell } from 'electron'
 import type { LocalMediaEntry } from '../src/types'
 import { writeJsonAtomic } from './storage'
 
@@ -43,7 +43,10 @@ export function addLocalMediaEntries(entries: LocalMediaEntry[]): LocalMediaEntr
   return listLocalMedia()
 }
 
-export function removeLocalMedia(path: string): LocalMediaEntry[] {
+// 移除引用；deleteFile=true 时把磁盘文件一并移入系统回收站（误删可恢复）。
+// 回收站失败（如网络盘）时抛错并保留引用，让 UI 报错而不是悄悄丢文件
+export async function removeLocalMedia(path: string, deleteFile = false): Promise<LocalMediaEntry[]> {
+  if (deleteFile && existsSync(path)) await shell.trashItem(path)
   persist(loadAll().filter((entry) => entry.path !== path))
   return listLocalMedia()
 }

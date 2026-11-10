@@ -69,7 +69,7 @@ export interface ElectronAPI {
   pickLocalMedia: () => Promise<IPCResult<LocalMediaEntry[]>>
   addLocalMedia: (paths: string[]) => Promise<IPCResult<LocalMediaEntry[]>>
   localList: () => Promise<IPCResult<LocalMediaEntry[]>>
-  removeLocalMedia: (path: string) => Promise<IPCResult<LocalMediaEntry[]>>
+  removeLocalMedia: (path: string, deleteFile?: boolean) => Promise<IPCResult<LocalMediaEntry[]>>
   getLocalMediaUrl: (localPath: string) => Promise<string>
   getLocalSubtitles: (videoPath: string) => Promise<IPCResult<TorrentFileInfo[]>>
   pickDownloadDir: () => Promise<IPCResult<string>>
@@ -175,7 +175,7 @@ export const ipc: ElectronAPI = {
   pickLocalMedia: () => getElectronAPI().pickLocalMedia(),
   addLocalMedia: (paths) => getElectronAPI().addLocalMedia(paths),
   localList: () => getElectronAPI().localList(),
-  removeLocalMedia: (path) => getElectronAPI().removeLocalMedia(path),
+  removeLocalMedia: (path, deleteFile) => getElectronAPI().removeLocalMedia(path, deleteFile),
   getLocalMediaUrl: (localPath) => getElectronAPI().getLocalMediaUrl(localPath),
   getLocalSubtitles: (videoPath) => getElectronAPI().getLocalSubtitles(videoPath),
   pickDownloadDir: () => getElectronAPI().pickDownloadDir(),
