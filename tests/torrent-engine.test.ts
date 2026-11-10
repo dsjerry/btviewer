@@ -120,6 +120,10 @@ describe('classifyInput', () => {
     expect(classifyInput('https://example.com/archive.zip')).toBe('http')
     expect(classifyInput('ftp://mirror.example.org/ubuntu.iso')).toBe('ftp')
   })
+  it('routes m3u8 playlists to HLS probing, including signed and case-insensitive URLs', () => {
+    expect(classifyInput('https://cdn.example/master.m3u8?token=abc')).toBe('hls')
+    expect(classifyInput('https://cdn.example/playlist.M3U8#quality')).toBe('hls')
+  })
   it('marks non-direct http(s) urls as web for yt-dlp probing', () => {
     expect(classifyInput('https://www.youtube.com/watch?v=abc')).toBe('web')
     expect(classifyInput('https://example.com/page')).toBe('web')

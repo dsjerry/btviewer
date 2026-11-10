@@ -7,7 +7,7 @@ import { createHash, randomBytes } from 'crypto'
 import { XMLParser } from 'fast-xml-parser'
 import { logger } from './logger'
 import { writeJsonAtomic } from './storage'
-import { clearDetectCache, detectBinary, detectJsRuntime, jsRuntimeArg, parseProgressLine, probeVideoSite, spawnYtdlpDownload, videoFormat, type VideoProbe } from './ytdlp-engine'
+import { clearDetectCache, detectBinary, detectJsRuntime, isHlsUrl, jsRuntimeArg, parseProgressLine, probeVideoSite, spawnYtdlpDownload, videoFormat, type VideoProbe } from './ytdlp-engine'
 import { PRIORITIZE_TAIL, ariaSize, prioritizePieceOption } from './stream-priority'
 import { compatCommand, parseFfmpegProgress, parseMediaInfo, parseProbeJson, planCompatPlayback, probeCommand, type CompatMode, type MediaStreams } from './media-transcode'
 import { parseByteRange } from './http-range'
@@ -64,8 +64,8 @@ const DEFAULT_COOKIE_CLIENT = 'web_embedded,web_safari'
 // URL 以这些扩展名结尾时按直链处理，不再交给 yt-dlp 探测（网页类 URL 才走视频站点解析）
 const DIRECT_MEDIA_EXTENSIONS = [...VIDEO_EXTENSIONS, ...AUDIO_EXTENSIONS, '.zip', '.rar', '.7z', '.gz', '.iso', '.exe', '.apk', '.dmg', '.pdf', '.epub', '.txt', '.xml', '.json']
 
-export type InputKind = 'magnet' | 'torrent' | 'metalink' | 'http' | 'ftp' | 'web' | 'unknown'
-// 输入分流：决定任务走 BT、直链还是视频站点解析（web = http(s) 但非明显直链，需 yt-dlp 探测）
+export type InputKind = 'magnet' | 'torrent' | 'metalink' | 'hls' | 'http' | 'ftp' | 'web' | 'unknown'
+// 输入分流：决定任务走 BT、直链、HLS 或视频站点解析（web = http(s) 但非明显直链，需 yt-dlp 探测）
 export function classifyInput(input: string): InputKind {
   const value = input.trim()
   if (!value) return 'unknown'
@@ -73,6 +73,7 @@ export function classifyInput(input: string): InputKind {
   const path = value.toLowerCase().split(/[?#]/)[0]
   if (path.endsWith('.torrent')) return 'torrent'
   if (path.endsWith('.metalink') || path.endsWith('.meta4')) return 'metalink'
+  if (/^https?:\/\//i.test(value) && isHlsUrl(value)) return 'hls'
   if (/^https?:\/\//i.test(value)) return DIRECT_MEDIA_EXTENSIONS.some((ext) => path.endsWith(ext)) ? 'http' : 'web'
   if (/^ftp:\/\//i.test(value)) return 'ftp'
   return 'unknown'
@@ -496,12 +497,22 @@ class TorrentEngine {
     return body.result
   }
 
-  // 统一任务入口：按输入类型分流到 BT / 直链 / Metalink / 视频站点
+  // 统一任务入口：按输入类型分流到 BT / 直链 / Metalink / HLS / 视频站点
   async addTask(input: string, onStatus?: (status: TorrentStatus) => void, opts: { wait?: boolean; dir?: string } = {}): Promise<TorrentStatus> {
     const kind = classifyInput(input)
     if (kind === 'magnet' || kind === 'torrent') return this.addTorrent(input, onStatus, opts)
     if (kind === 'metalink') return this.addMetalinkFile(input, onStatus, opts)
     if (kind === 'http' || kind === 'ftp') return this.addDirect([input.trim()], onStatus, opts)
+    if (kind === 'hls') {
+      const url = input.trim()
+      const probe = await this.probeHls(url)
+      const key = stableKey(url)
+      const existing = this.taskSources.get(key)
+      if (existing && existing.type !== 'video') {
+        await this.removeTorrent(key, true).catch(() => undefined)
+      }
+      return this.addVideo(url, probe, onStatus, opts)
+    }
     if (kind === 'web') {
       // 网页类 URL：yt-dlp 可用时先探测视频站点，探测失败（普通网页/网络错误）回退直链下载
       const url = input.trim()
@@ -578,6 +589,24 @@ class TorrentEngine {
     }
     if (isVideoSite) throw new Error('视频解析失败：' + (clean(lastError) || '站点返回异常，请稍后重试'))
     return null
+  }
+
+  private async probeHls(url: string): Promise<VideoProbe> {
+    const binary = await this.resolveYtdlp()
+    if (!binary) throw new Error('未找到 yt-dlp，可在设置中自动安装或配置路径')
+    const jsRuntime = await this.resolveJsRuntime()
+    const cookies = this.cookiesBrowser || undefined
+    const attempts = cookies ? [cookies, undefined] : [undefined]
+    let lastError = ''
+    for (const cookiesBrowser of attempts) {
+      const result = await probeVideoSite(binary, url, { proxy: this.proxy || undefined, jsRuntime, cookiesBrowser })
+      if (result.probe && !result.restricted) {
+        if (!cookiesBrowser && cookies) result.probe.noCookies = true
+        return result.probe
+      }
+      lastError = result.errorLine.replace(/^ERROR:\s*/, '')
+    }
+    throw new Error(`m3u8 解析失败：${lastError || '未发现可下载的视频流'}`)
   }
 
   // 直链下载（HTTP/HTTPS/FTP）：uris 为同一资源的多个镜像，aria2 会自动切换

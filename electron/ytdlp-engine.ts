@@ -47,12 +47,27 @@ function etaSeconds(value: string) {
   return parts.reduce((sum, item) => sum * 60 + item, 0)
 }
 
+export function isHlsUrl(input: string): boolean {
+  try {
+    const url = new URL(input)
+    return (url.protocol === 'http:' || url.protocol === 'https:') && /\.m3u8$/i.test(url.pathname)
+  } catch { return false }
+}
+
+export function hlsTitleFromUrl(input: string): string {
+  try {
+    const segment = new URL(input).pathname.split('/').filter(Boolean).pop() || ''
+    const title = decodeURIComponent(segment).replace(/\.m3u8$/i, '').trim()
+    return title || 'HLS Video'
+  } catch { return 'HLS Video' }
+}
+
 // --dump-single-json 的单视频元信息；playlist 或解析失败返回 null
-export function parseVideoProbe(json: string): VideoProbe | null {
+export function parseVideoProbe(json: string, fallbackTitle?: string): VideoProbe | null {
   try {
     const data = JSON.parse(json) as Record<string, unknown>
     if (!data || data._type === 'playlist') return null
-    const title = typeof data.title === 'string' ? data.title : ''
+    const title = typeof data.title === 'string' && data.title.trim() ? data.title.trim() : fallbackTitle || ''
     if (!title) return null
     const size = typeof data.filesize === 'number' && data.filesize > 0 ? data.filesize : typeof data.filesize_approx === 'number' && data.filesize_approx > 0 ? data.filesize_approx : undefined
     return {
@@ -198,7 +213,7 @@ function versionCheck(candidate: string, args: string[]): Promise<boolean> {
 
 export interface ProbeResult { probe: VideoProbe | null; botCheck: boolean; restricted: boolean; cookieFail: boolean; errorLine: string }
 
-// 探测 URL 是否为可解析的视频站点条目；botCheck 标记 YouTube 风控，restricted 标记格式受限，
+// 探测 URL 是否为可解析的视频站点或 HLS 条目；botCheck 标记 YouTube 风控，restricted 标记格式受限，
 // cookieFail 标记浏览器 Cookies 读取失败，errorLine 透传站点错误（视频不可用等）供调用方分类
 export async function probeVideoSite(binary: string, url: string, opts: YtdlpRunOptions & { timeoutMs?: number } = {}): Promise<ProbeResult> {
   const { proxy, cookiesBrowser, client, jsRuntime, timeoutMs = 45000 } = opts
@@ -229,7 +244,7 @@ export async function probeVideoSite(binary: string, url: string, opts: YtdlpRun
           })
           return
         }
-        const probe = parseVideoProbe(stdout)
+        const probe = parseVideoProbe(stdout, isHlsUrl(url) ? hlsTitleFromUrl(url) : undefined)
         if (probe && client) probe.client = client
         // 有标题但 formats 全部不可播（storyboard 占位等）→ 受限，调用方换客户端重试
         let restricted = false

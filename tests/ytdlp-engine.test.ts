@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { binaryVersionArgs, decodeLine, isRuntimeVersionSupported, jsRuntimeArg, parseProgressLine, parseRuntimeVersion, parseVideoProbe, videoFormat } from '../electron/ytdlp-engine'
+import { binaryVersionArgs, decodeLine, hlsTitleFromUrl, isHlsUrl, isRuntimeVersionSupported, jsRuntimeArg, parseProgressLine, parseRuntimeVersion, parseVideoProbe, videoFormat } from '../electron/ytdlp-engine'
 
 describe('binaryVersionArgs', () => {
   it('uses ffmpeg’s single-dash version flag and yt-dlp’s double-dash flag', () => {
@@ -56,6 +56,22 @@ describe('parseVideoProbe', () => {
     expect(parseVideoProbe(JSON.stringify({ _type: 'playlist', entries: [] }))).toBeNull()
     expect(parseVideoProbe(JSON.stringify({ ext: 'mp4' }))).toBeNull()
     expect(parseVideoProbe('not json')).toBeNull()
+  })
+  it('uses a fallback title when an HLS probe omits one', () => {
+    expect(parseVideoProbe(JSON.stringify({ ext: 'mp4' }), 'live-stream')).toMatchObject({ title: 'live-stream', ext: 'mp4' })
+  })
+})
+
+describe('HLS URLs', () => {
+  it('recognizes HTTP m3u8 paths regardless of case or query strings', () => {
+    expect(isHlsUrl('https://cdn.example/master.m3u8?token=abc')).toBe(true)
+    expect(isHlsUrl('https://cdn.example/PLAYLIST.M3U8#quality')).toBe(true)
+    expect(isHlsUrl('https://cdn.example/video.mp4')).toBe(false)
+    expect(isHlsUrl('ftp://cdn.example/master.m3u8')).toBe(false)
+  })
+  it('derives a readable title from the playlist filename', () => {
+    expect(hlsTitleFromUrl('https://cdn.example/live%20stream.m3u8?token=abc')).toBe('live stream')
+    expect(hlsTitleFromUrl('https://cdn.example/index.m3u8')).toBe('index')
   })
 })
 

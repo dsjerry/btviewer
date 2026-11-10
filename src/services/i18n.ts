@@ -41,7 +41,7 @@ const MESSAGES: Record<string, [string, string]> = {
   'home.title': ['添加下载任务', 'Add a download'],
   'home.subtitle': ['磁力/种子解析后选择操作，直链直接下载；多行粘贴＝批量添加', 'Magnets and torrents are parsed first; direct links start right away. Paste multiple lines to queue in bulk.'],
   'home.inputLabel': ['下载链接', 'Link'],
-  'home.placeholder': ['magnet:?xt=urn:btih:... 或 https://… / ftp://… 下载链接；支持一次粘贴多个（每行一个）', 'magnet:?xt=urn:btih:… or https://… / ftp://… ; paste one link per line for bulk add'],
+  'home.placeholder': ['magnet:?xt=urn:btih:... 或 https://… / ftp://… 下载链接（支持 m3u8）；支持一次粘贴多个（每行一个）', 'magnet:?xt=urn:btih:… or https://… / ftp://… (including m3u8); paste one link per line for bulk add'],
   'home.add': ['添加任务', 'Add task'],
   'home.adding': ['添加中…', 'Adding…'],
   'home.or': ['或者', 'or'],
