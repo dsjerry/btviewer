@@ -1,8 +1,18 @@
-# BTViewer
+<p align="center">
+  <img src="./resources/icon.png" alt="BTViewer 应用图标" width="144" height="144">
+</p>
 
-简体中文 | [English](./README.en.md)
+<h1 align="center">BTViewer</h1>
 
-BTViewer 是一个基于 Electron 的本地多协议下载器。它支持解析磁力链接或 `.torrent` 文件、HTTP(S)/FTP 直链与 Metalink 下载，并可通过外挂 yt-dlp 解析下载视频站点（YouTube、Bilibili 等）。欢迎通过 [Issues](https://github.com/dsjerry/btviewer/issues) 反馈问题，参与贡献请阅读 [CONTRIBUTING.md](./CONTRIBUTING.md)。
+<p align="center">多协议下载 · 本地媒体库 · 即下即播</p>
+
+<p align="center">
+  <strong>简体中文</strong> | <a href="./README.en.md">English</a>
+</p>
+
+BTViewer 是一个基于 Electron + React 的桌面下载与媒体播放应用。支持磁力链接、`.torrent` 文件、HTTP(S)/FTP 直链、Metalink，以及通过 yt-dlp 解析 HLS（`.m3u8`）和视频站点（YouTube、Bilibili 等）。下载任务与导入的本地媒体可以统一浏览、归入自定义合集，并在内置播放器中播放。
+
+欢迎通过 [Issues](https://github.com/dsjerry/btviewer/issues) 反馈问题，参与贡献请阅读 [CONTRIBUTING.md](./CONTRIBUTING.md)。
 
 ## 当前架构
 
@@ -10,7 +20,7 @@ BTViewer 是一个基于 Electron 的本地多协议下载器。它支持解析�
 Electron + React UI
         ↓ IPC
 本地 aria2c（JSON-RPC）          yt-dlp（可选外挂）
-  ├─ DHT / UDP Tracker / TCP Peer   ├─ 视频站点解析
+  ├─ DHT / UDP Tracker / TCP Peer   ├─ 视频站点 / HLS 解析
   ├─ HTTP(S) / FTP 直链（分片加速）  └─ 音视频流下载
   └─ Metalink
         ↓
@@ -19,7 +29,7 @@ Electron + React UI
 Video.js 播放器
 ```
 
-aria2 负责资源发现和下载（BT 与直链共用一个下载队列），yt-dlp 作为可选外挂负责视频站点，Electron 主进程负责 RPC 管理及本地媒体流转发，renderer 只负责界面和交互。
+aria2 负责资源发现和下载（BT 与直链共用一个下载队列），yt-dlp 作为可选外挂负责视频站点与 HLS，Electron 主进程负责 RPC 管理、本地媒体与合集持久化，以及媒体流转发，renderer 只负责界面和交互。
 
 ## 功能
 
@@ -30,22 +40,35 @@ aria2 负责资源发现和下载（BT 与直链共用一个下载队列），yt
   - **下载全部资源**：选择任务中的全部文件并开始下载
 - HTTP(S)/FTP 直链下载：多线程分片加速（每服务器连接数可调），与 BT 任务统一管理
 - Metalink 文件：本地解析后按文件展开为直链任务，多镜像自动切换
+- HLS（`.m3u8`）下载：通过 yt-dlp 解析播放列表与下载分片，按需使用 ffmpeg 合并或封装
 - 视频站点（可选）：yt-dlp 可一键安装，网页类链接自动解析下载（解析 YouTube 高画质需 JS 运行时 deno，合并音视频需 ffmpeg，设置页均可一键安装）
-- 媒体库管理：浏览任务文件、移除记录或删除任务与已下载文件
+- 本地媒体导入：通过文件选择器登记进媒体库，或拖入窗口直接播放；只保存文件引用，不复制原文件
+- 媒体库浏览：卡片 / 列表视图、搜索、类型与观看状态筛选，支持按名称、大小、添加时间或最近观看排序
+- 自定义合集：创建、重命名、删除合集，将下载任务与本地媒体批量加入或移出；同一条目可属于多个合集，删除合集不删除原文件
+- 媒体库清理：默认仅移除记录，可在确认框选择同时清理磁盘文件
+- 内置播放器：断点续播、跨任务剧集播放列表、上一集 / 下一集与自动连播、字幕自动匹配及外挂 SRT/VTT；支持画中画、截图、片段录制和 3D 视图，具体能力受平台与媒体格式限制
+- RSS 订阅：关键词过滤、自动下载与按季归组
 - 下载任务状态、速度、节点数、进度与剩余时间展示，支持暂停、恢复和移除
 - 设置页：自定义下载目录、Tracker 列表、最大同时下载数（持久化并对新任务生效）
 - 本地 HTTP Range 流播放（带访问令牌，防止本机其它进程读取）
 - 单实例运行：安装包注册 `.torrent` / `.metalink` 文件关联与 `magnet` 协议，双击种子或点网页磁力链接会把任务交给已运行的实例处理；磁力默认关联可在设置页开关（默认不抢其它 BT 客户端的关联）
 - 剪贴板监听（可选，默认关闭）：复制到磁力/直链时在应用内提示一键添加，不会自动开始下载；队列全部完成后可执行打开目录/文件、退出、关机、睡眠（关机带 60 秒取消窗口）
 - 应用内日志查看（按级别过滤、只读文件尾部）与「复制诊断信息」（版本/引擎/设置/任务概况/最近错误，自动隐藏代理账号密码与本机用户名）；命令行 `BTViewer.exe --diagnostics` 可直接输出同一份诊断文本
-- 界面语言：默认简体中文，可在设置页切换为 English（导航、首页、下载、媒体库、订阅、设置、播放器全部完成翻译；词条表 430+ 条，缺英文时自动回退中文）
+- 界面语言：默认简体中文，可在设置页切换为 English；缺少英文词条时自动回退中文
 - 自动注入公共 Tracker，支持通过环境变量或设置页自定义
-- 自定义无边框窗口和深色媒体工作台界面，内置应用图标
-- Windows（x64）与 Linux（amd64）开发环境内置 aria2c
+- 自定义无边框窗口、可折叠侧栏，支持浅色 / 深色 / 跟随系统主题，统一使用内置应用图标
+- Windows（x64）、Linux（amd64）与 macOS Apple 芯片（arm64）开发环境内置 aria2c
+
+## 快速使用
+
+1. **添加资源**：在首页粘贴磁力、直链、`.m3u8` 或视频网页链接，也可以打开 `.torrent` / `.metalink` 文件。
+2. **选择操作**：解析后保存到媒体库、选择可播放文件，或下载全部资源；任务进度可在「下载」中查看。
+3. **管理媒体**：在「媒体库」导入本地视频 / 音频，勾选条目后批量加入合集；删除合集只移除分组，不影响媒体文件。
+4. **安装可选依赖**：使用视频站点或 HLS 前，在「设置 → 视频站点解析」检查 yt-dlp、ffmpeg 与 JS 运行时；普通 BT / 直链下载不需要 yt-dlp。
 
 ## 环境要求
 
-- Node.js 20+
+- Node.js 20+（推荐 22+；冒烟测试及将 Node 用作 YouTube 外部 JS 运行时时需 22+）
 - npm
 - Electron 支持的平台
 - aria2c：
@@ -173,17 +196,21 @@ electron/
   preload.ts           安全 IPC bridge
   torrent-engine.ts    aria2 RPC、协议分流与本地媒体流服务
   ytdlp-engine.ts      yt-dlp 外挂（视频站点探测与下载）
+  local-media.ts       本地媒体引用管理
+  media-collections.ts 自定义合集持久化
   settings.ts          应用设置持久化（settings.json）
 src/
-  components/          首页、媒体库、下载任务、播放器和设置页
+  components/          首页、媒体库、下载、订阅、播放器和设置页
   services/ipc.ts      renderer 端 IPC 类型封装
   styles/global.css    自定义视觉系统
 scripts/
   dev.mjs              开发启动器（隔离 ELECTRON_RUN_AS_NODE）
-  generate-icons.mjs   从 logo.svg 生成应用图标
+  generate-icons.mjs   从原始 PNG 生成各平台图标与 SVG 封装
 resources/
   aria2/               随应用分发的 aria2 二进制资源
-  logo.svg             应用 logo 源文件
+  media/               按平台与架构存放的 ffmpeg/ffprobe
+  霓虹绿媒体下载播放器图标.png  原始图标母版
+  logo.svg             嵌入原始 PNG 的生成文件（非矢量重绘）
   icon.ico/.icns/.png  打包用图标（由 generate-icons.mjs 生成）
 ```
 
@@ -191,6 +218,25 @@ resources/
 > Windows、macOS 全部由应用自动下载官方构建到用户目录（`~/Library/Application Support/BTViewer/bin`
 > 或 `%APPDATA%\BTViewer\bin`），**不需要终端、pip 或 brew**。Linux 上 yt-dlp 与 deno 同样可一键安装，
 > ffmpeg 仍建议由发行版包管理器提供（各发行版构建的编解码器差异大）。
+
+## 应用图标
+
+README、侧栏与关于页统一使用 `resources/icon.png`。原始母版为 `resources/霓虹绿媒体下载播放器图标.png`，更新母版后，在项目根目录运行：
+
+```bash
+node scripts/generate-icons.mjs
+```
+
+生成过程保留原图，规整透明留白，并生成以下资源；不要直接编辑生成文件：
+
+| 文件 | 尺寸 | 用途 |
+| --- | --- | --- |
+| `resources/icon.png` | 512 × 512 | README、应用内图标、托盘与 Linux 打包 |
+| `resources/icon.ico` | 16 / 32 / 48 / 64 / 128 / 256px | Windows 应用与快捷方式 |
+| `resources/icon.icns` | 16 / 32 / 64 / 128 / 256 / 512 / 1024px | macOS 与 Retina 显示 |
+| `resources/logo.svg` | 嵌入原始 PNG | 兼容 SVG 引用，不是真正的矢量图 |
+
+图标一致性由 `tests/icons.test.ts` 校验。桌面和 Dock 图标需重新打包安装后更新。
 
 ## 打包说明
 
@@ -235,7 +281,7 @@ npm run package:mac     # macOS dmg + zip
 npm run package:linux   # Linux AppImage + deb
 ```
 
-发布走 GitHub Actions：[.github/workflows/release.yml](.github/workflows/release.yml) 是手动触发的工作流（Actions 页面填版本号，如 `v1.2.3`），会先规范化并写入 `package.json` 版本，再在 Windows / Linux 上打包（macOS 暂不打包：仓库内没有 macOS 版 aria2c 二进制），最后统一创建 GitHub Release 并附加产物；[.github/workflows/ci.yml](.github/workflows/ci.yml) 在每次 push / PR 上跑 lint、类型检查、单测与构建（`npm run verify` 可在本地一次跑完前三项）。
+发布走 GitHub Actions：[.github/workflows/release.yml](.github/workflows/release.yml) 是手动触发的工作流（Actions 页面填版本号，如 `v1.2.3`），会先规范化并写入 `package.json` 版本，通过验证后并行构建 Windows、Linux 与 macOS Apple 芯片（arm64）安装包，最后统一创建 GitHub Release 并附加产物；[.github/workflows/ci.yml](.github/workflows/ci.yml) 在 push 到 `main` 或提交 PR 时执行三平台 lint、类型检查、单测与构建，并在 Windows 上运行冒烟测试（`npm run verify` 可在本地一次跑完前三项）。
 
 主进程依赖（如 fast-xml-parser）在构建时内联进主进程包，因此安装包内不再分发 `node_modules`——改动 `electron.vite.config.ts` 的 external 列表时需注意这一点。
 
@@ -284,7 +330,7 @@ Chromium/Video.js 对视频编码和容器格式有支持边界。建议优先�
 
 ## 免责声明
 
-本应用仅提供 BitTorrent、HTTP(S)/FTP 直链与 Metalink 协议的下载与播放功能，不内置、不推荐、不分发任何受版权保护的资源。使用者需自行确保下载与分享的内容合法，并承担相应的法律责任。
+本应用提供多协议下载、本地媒体管理与播放功能，不内置、不推荐、不分发任何受版权保护的资源。使用者需自行确保下载与分享的内容合法，并承担相应的法律责任。
 
 ## 许可证
 

@@ -10,6 +10,7 @@ import { loadSettings, saveSettings } from './settings'
 import { addFeed, checkAllFeeds, checkFeed, downloadFeedItem, getFeeds, removeFeed, startPolling, updateFeed } from './rss'
 import { getFileType, isUnderRoot, resolveAria2Binary } from './torrent-engine'
 import { addLocalMediaEntries, listLocalMedia, removeLocalMedia } from './local-media'
+import { createMediaCollection, listMediaCollections, removeMediaCollection, renameMediaCollection, updateMediaCollectionMembership } from './media-collections'
 import { collectLaunchInputs } from './launch-inputs'
 import { planPostAction } from './post-action'
 import { createClipboardWatcher } from './clipboard-watch'
@@ -19,7 +20,7 @@ import { downloadYtDlp, downloadFfmpeg, downloadDeno, updateYtDlp, seedBundledMe
 import { logger, listLogFiles, readLogTail } from './logger'
 import { buildDiagnostics } from './diagnostics'
 import { isNewerVersion, parseLatestRelease } from './update-check'
-import type { AppSettings, GlobalStat, LocalMediaEntry, TorrentStatus } from '../src/types'
+import type { AppSettings, GlobalStat, LocalMediaEntry, MediaCollectionItem, TorrentStatus } from '../src/types'
 
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
@@ -885,6 +886,32 @@ function setupIPC() {
   ipcMain.handle('local:remove', async (_event, path: string, deleteFile = false) => {
     try {
       return { success: true, data: await removeLocalMedia(String(path), Boolean(deleteFile)) }
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) }
+    }
+  })
+
+  ipcMain.handle('media-collections:list', () => ({ success: true, data: listMediaCollections() }))
+
+  ipcMain.handle('media-collections:create', (_event, name: string) => {
+    try { return { success: true, data: createMediaCollection(String(name ?? '')) } }
+    catch (error) { return { success: false, error: getErrorMessage(error) } }
+  })
+
+  ipcMain.handle('media-collections:rename', (_event, id: string, name: string) => {
+    try { return { success: true, data: renameMediaCollection(String(id ?? ''), String(name ?? '')) } }
+    catch (error) { return { success: false, error: getErrorMessage(error) } }
+  })
+
+  ipcMain.handle('media-collections:remove', (_event, id: string) => {
+    try { return { success: true, data: removeMediaCollection(String(id ?? '')) } }
+    catch (error) { return { success: false, error: getErrorMessage(error) } }
+  })
+
+  ipcMain.handle('media-collections:update-items', (_event, id: string, items: MediaCollectionItem[], action: 'add' | 'remove') => {
+    try {
+      if (action !== 'add' && action !== 'remove') return { success: false, error: '合集操作无效' }
+      return { success: true, data: updateMediaCollectionMembership(String(id ?? ''), Array.isArray(items) ? items : [], action) }
     } catch (error) {
       return { success: false, error: getErrorMessage(error) }
     }

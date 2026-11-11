@@ -5,9 +5,11 @@ import { formatSize, localEntryToFile, statusLabel, taskType, typeLabel, watchLa
 import { episodeLabel, parseEpisode, type EpisodeTag } from '../services/episode'
 import { t } from '../services/i18n'
 import { ConfirmDialog } from './ConfirmDialog'
-import type { LocalMediaEntry, TorrentFileInfo, TorrentStatus, WatchProgress } from '../types'
+import { MediaCollectionDialog } from './MediaCollectionDialog'
+import type { LocalMediaEntry, MediaCollection, MediaCollectionItem, TorrentFileInfo, TorrentStatus, WatchProgress } from '../types'
 import { LOCAL_MEDIA_HASH } from '../types'
 import getThumbnail from '../services/thumbnail'
+import { hasMediaCollectionItem, isMediaCollectionItem, mediaCollectionItemKey } from '../services/media-collections'
 interface FileListProps {
   torrent: TorrentStatus | null
   torrents: TorrentStatus[]
@@ -52,6 +54,10 @@ const downloadHint = (torrent: TorrentStatus) => {
   if (torrent.status === 'seeding') return ''
   return torrent.status === 'downloading' ? ` · ${t('status.downloading')} ${percentOf(torrent)}%` : ` · ${statusLabel(torrent.status)}`
 }
+type CollectionDialogState =
+  | { mode: 'create' }
+  | { mode: 'rename'; collection: MediaCollection }
+const MEDIA_DRAG_TYPE = 'application/x-btviewer-media-items'
 
 // 视频缩略图：从媒体流截帧（服务内含持久化与失败负缓存），截不出时回退图标
 const VideoThumb: React.FC<{ infoHash: string; file?: TorrentFileInfo; className: string; fallback: string }> = ({ infoHash, file, className, fallback }) => {
@@ -82,14 +88,19 @@ interface LibraryTileProps {
   progress: number
   meta: React.ReactNode
   onClick: () => void
+  onOpen: () => void
+  selected: boolean
+  onToggleSelected: () => void
+  onDragStart: (event: React.DragEvent<HTMLDivElement>) => void
   onRemove: () => void
   removeTitle: string
   isLocal?: boolean
   missing?: boolean
 }
-const LibraryTile: React.FC<LibraryTileProps> = ({ thumb, title, tags, progress, meta, onClick, onRemove, removeTitle, isLocal, missing }) => (
-  <div className={`torrent-tile ${isLocal ? 'local-tile' : ''} ${missing ? 'is-missing' : ''}`} onClick={onClick} role="button" tabIndex={0}>
-    <button className="tile-remove" title={removeTitle} onClick={(event) => { event.stopPropagation(); onRemove() }}>×</button>
+const LibraryTile: React.FC<LibraryTileProps> = ({ thumb, title, tags, progress, meta, onClick, onOpen, selected, onToggleSelected, onDragStart, onRemove, removeTitle, isLocal, missing }) => (
+  <div className={`torrent-tile ${isLocal ? 'local-tile' : ''} ${missing ? 'is-missing' : ''} ${selected ? 'is-selected' : ''}`} onClick={onClick} onDoubleClick={(event) => { event.stopPropagation(); onOpen() }} onKeyDown={(event) => { if (event.target === event.currentTarget && event.key === 'Enter') { event.preventDefault(); onOpen() } else if (event.target === event.currentTarget && event.key === ' ') { event.preventDefault(); onClick() } }} onDragStart={onDragStart} draggable role="button" aria-pressed={selected} tabIndex={0}>
+    <button type="button" className={`media-select ${selected ? 'is-selected' : ''}`} title={selected ? t('library.deselectItem') : t('library.selectItem')} aria-label={selected ? t('library.deselectItem') : t('library.selectItem')} aria-pressed={selected} onDoubleClick={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); onToggleSelected() }}><span>{selected ? '✓' : ''}</span></button>
+    <button type="button" className="tile-remove" title={removeTitle} onDoubleClick={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); onRemove() }}>×</button>
     <div className="tile-poster">
       {thumb}
       <span className="tile-scrim" aria-hidden="true" />
@@ -107,24 +118,31 @@ interface LibraryRowProps {
   thumb: React.ReactNode
   title: string
   sub: React.ReactNode
+  collectionBadges?: React.ReactNode
   progress: number
   trailing?: React.ReactNode
   onClick: () => void
+  onOpen: () => void
+  selected: boolean
+  onToggleSelected: () => void
+  onDragStart: (event: React.DragEvent<HTMLDivElement>) => void
   onRemove: () => void
   removeTitle: string
   isLocal?: boolean
   missing?: boolean
 }
-const LibraryRow: React.FC<LibraryRowProps> = ({ thumb, title, sub, progress, trailing, onClick, onRemove, removeTitle, isLocal, missing }) => (
-  <div className={`library-row ${isLocal ? 'local-row' : ''} ${missing ? 'is-missing' : ''}`} onClick={onClick} role="button" tabIndex={0}>
+const LibraryRow: React.FC<LibraryRowProps> = ({ thumb, title, sub, collectionBadges, progress, trailing, onClick, onOpen, selected, onToggleSelected, onDragStart, onRemove, removeTitle, isLocal, missing }) => (
+  <div className={`library-row ${isLocal ? 'local-row' : ''} ${missing ? 'is-missing' : ''} ${selected ? 'is-selected' : ''}`} onClick={onClick} onDoubleClick={(event) => { event.stopPropagation(); onOpen() }} onKeyDown={(event) => { if (event.target === event.currentTarget && event.key === 'Enter') { event.preventDefault(); onOpen() } else if (event.target === event.currentTarget && event.key === ' ') { event.preventDefault(); onClick() } }} onDragStart={onDragStart} draggable role="button" aria-pressed={selected} tabIndex={0}>
+    <button type="button" className={`media-select ${selected ? 'is-selected' : ''}`} title={selected ? t('library.deselectItem') : t('library.selectItem')} aria-label={selected ? t('library.deselectItem') : t('library.selectItem')} aria-pressed={selected} onDoubleClick={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); onToggleSelected() }}><span>{selected ? '✓' : ''}</span></button>
     {thumb}
     <div className="row-main">
       <strong title={title}>{title}</strong>
       <span className="row-sub">{sub}</span>
+      {collectionBadges}
     </div>
     {trailing}
     <span className="row-progress"><span className="bar"><span style={{ width: `${progress}%` }} /></span>{progress > 0 && <small>{progress}%</small>}</span>
-    <button className="tile-remove" title={removeTitle} onClick={(event) => { event.stopPropagation(); onRemove() }}>×</button>
+    <button type="button" className="tile-remove" title={removeTitle} onDoubleClick={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); onRemove() }}>×</button>
   </div>
 )
 
@@ -138,11 +156,173 @@ const FileRow = memo<FileRowProps>(({ infoHash, file, onPlayFile }) => {
 
 const FileList: React.FC<FileListProps> = ({ torrent, torrents, onSelectTorrent, onPlayFile, onResumeTorrent, onRemove, onBack, localLibrary, onImportLocal, onPlayLocalFile, onRemoveLocal, onRefreshLocal }) => {
   const [query, setQuery] = useState('')
+  const [keyword, setKeyword] = useState('')
   const [copied, setCopied] = useState(false)
   // 本地引用的 missing 状态要现查（移动硬盘可能已挂载/拔出）：挂载时刷一次
   useEffect(() => { onRefreshLocal() }, [onRefreshLocal])
   // 移除确认：先弹窗，勾选「同时删除本地文件」才删盘（BT 任务传 destroy，本地引用传 deleteFile）
   const [pending, setPending] = useState<{ kind: 'task'; item: TorrentStatus } | { kind: 'local'; entry: LocalMediaEntry } | null>(null)
+  const [collections, setCollections] = useState<MediaCollection[]>([])
+  const [activeCollectionId, setActiveCollectionId] = useState(() => localStorage.getItem('btviewer-library-collection') || 'all')
+  const [collectionsLoaded, setCollectionsLoaded] = useState(false)
+  const [collectionDialog, setCollectionDialog] = useState<CollectionDialogState | null>(null)
+  const [collectionError, setCollectionError] = useState('')
+  const [collectionNotice, setCollectionNotice] = useState('')
+  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(() => new Set())
+  const [targetCollectionId, setTargetCollectionId] = useState('')
+  const [dropTargetId, setDropTargetId] = useState<string | null>(null)
+  useEffect(() => {
+    let active = true
+    void ipc.mediaCollectionsList().then((result) => {
+      if (!active) return
+      if (result.success && result.data) setCollections(result.data)
+      setCollectionsLoaded(true)
+    }).catch(() => { if (active) setCollectionsLoaded(true) })
+    return () => { active = false }
+  }, [])
+  useEffect(() => {
+    if (!collectionsLoaded || activeCollectionId === 'all' || activeCollectionId === 'ungrouped' || collections.some((collection) => collection.id === activeCollectionId)) return
+    setActiveCollectionId('all')
+    localStorage.setItem('btviewer-library-collection', 'all')
+  }, [activeCollectionId, collections, collectionsLoaded])
+  const selectCollection = (id: string) => {
+    setActiveCollectionId(id)
+    localStorage.setItem('btviewer-library-collection', id)
+    setSelectedKeys(new Set())
+    setCollectionNotice('')
+  }
+  const activeCollection = collections.find((collection) => collection.id === activeCollectionId) ?? null
+  useEffect(() => {
+    if (collections.some((collection) => collection.id === targetCollectionId)) return
+    setTargetCollectionId(activeCollection?.id || collections[0]?.id || '')
+  }, [activeCollection, collections, targetCollectionId])
+  const allMediaItems = useMemo<MediaCollectionItem[]>(() => [
+    ...torrents.map((item) => ({ type: 'task' as const, id: item.infoHash })),
+    ...localLibrary.map((entry) => ({ type: 'local' as const, id: entry.path }))
+  ], [torrents, localLibrary])
+  const selectedItems = useMemo(() => allMediaItems.filter((item) => selectedKeys.has(mediaCollectionItemKey(item))), [allMediaItems, selectedKeys])
+  const collectionItemCount = (collection: MediaCollection) => collection.items.filter((item) => allMediaItems.some((entry) => mediaCollectionItemKey(entry) === mediaCollectionItemKey(item))).length
+  const isInAnyCollection = (item: MediaCollectionItem) => collections.some((collection) => hasMediaCollectionItem(collection, item))
+  const membershipBadges = (item: MediaCollectionItem): React.ReactNode[] => {
+    if (activeCollectionId !== 'all') return []
+    const memberships = collections.filter((collection) => hasMediaCollectionItem(collection, item))
+    const badges: React.ReactNode[] = memberships.slice(0, 2).map((collection) => (
+      <button
+        key={collection.id}
+        type="button"
+        className="collection-chip"
+        title={collection.name}
+        aria-label={t('library.openCollection', { name: collection.name })}
+        onDoubleClick={(event) => event.stopPropagation()}
+        onClick={(event) => { event.stopPropagation(); selectCollection(collection.id) }}
+      >{collection.name}</button>
+    ))
+    if (memberships.length > 2) badges.push(<span key="more" className="collection-chip-more" title={memberships.slice(2).map((collection) => collection.name).join(', ')}>+{memberships.length - 2}</span>)
+    return badges
+  }
+  const ungroupedCount = allMediaItems.filter((item) => !isInAnyCollection(item)).length
+  const collectionTorrents = useMemo(() => {
+    if (activeCollection) return torrents.filter((item) => hasMediaCollectionItem(activeCollection, { type: 'task', id: item.infoHash }))
+    if (activeCollectionId === 'ungrouped') return torrents.filter((item) => !collections.some((collection) => hasMediaCollectionItem(collection, { type: 'task', id: item.infoHash })))
+    return torrents
+  }, [activeCollection, activeCollectionId, collections, torrents])
+  const collectionLocals = useMemo(() => {
+    const text = keyword.trim().toLowerCase()
+    return localLibrary.filter((entry) =>
+      (activeCollection
+        ? hasMediaCollectionItem(activeCollection, { type: 'local', id: entry.path })
+        : activeCollectionId === 'ungrouped'
+          ? !collections.some((collection) => hasMediaCollectionItem(collection, { type: 'local', id: entry.path }))
+          : true)
+      && (!text || entry.name.toLowerCase().includes(text)))
+  }, [activeCollection, activeCollectionId, collections, localLibrary, keyword])
+  const saveCollectionDialog = async (dialog: CollectionDialogState, value: string): Promise<boolean> => {
+    try {
+      const result = dialog.mode === 'create'
+        ? await ipc.mediaCollectionCreate(value)
+        : await ipc.mediaCollectionRename(dialog.collection.id, value)
+      if (!result.success || !result.data) {
+        setCollectionError(result.error || t('library.collectionError'))
+        return false
+      }
+      setCollections(result.data)
+      setCollectionError('')
+      if (dialog.mode === 'create') {
+        const created = result.data.find((collection) => !collections.some((existing) => existing.id === collection.id))
+        if (created) setTargetCollectionId(created.id)
+      }
+      return true
+    } catch (error) {
+      setCollectionError(error instanceof Error ? error.message : t('library.collectionError'))
+      return false
+    }
+  }
+  const updateCollectionItems = async (collectionId: string, items: MediaCollectionItem[], action: 'add' | 'remove'): Promise<boolean> => {
+    if (!items.length) return false
+    try {
+      const result = await ipc.mediaCollectionUpdateItems(collectionId, items, action)
+      if (!result.success || !result.data) {
+        setCollectionError(result.error || t('library.collectionError'))
+        return false
+      }
+      setCollections(result.data)
+      setCollectionError('')
+      return true
+    } catch (error) {
+      setCollectionError(error instanceof Error ? error.message : t('library.collectionError'))
+      return false
+    }
+  }
+  const toggleSelected = (item: MediaCollectionItem) => {
+    const key = mediaCollectionItemKey(item)
+    setSelectedKeys((current) => {
+      const next = new Set(current)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+    setCollectionNotice('')
+  }
+  const openSelectedItem = (item: MediaCollectionItem, open: () => void) => {
+    setSelectedKeys((current) => new Set(current).add(mediaCollectionItemKey(item)))
+    open()
+  }
+  const handleMediaDragStart = (event: React.DragEvent<HTMLDivElement>, item: MediaCollectionItem) => {
+    const items = selectedKeys.has(mediaCollectionItemKey(item)) ? selectedItems : [item]
+    event.dataTransfer.setData(MEDIA_DRAG_TYPE, JSON.stringify(items))
+    event.dataTransfer.effectAllowed = 'copy'
+  }
+  const handleCollectionDragOver = (event: React.DragEvent<HTMLElement>, collectionId: string) => {
+    if (!Array.from(event.dataTransfer.types).includes(MEDIA_DRAG_TYPE)) return
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'copy'
+    setDropTargetId(collectionId)
+  }
+  const handleCollectionDrop = async (event: React.DragEvent<HTMLElement>, collectionId: string) => {
+    event.preventDefault()
+    setDropTargetId(null)
+    let items: MediaCollectionItem[]
+    try {
+      const parsed: unknown = JSON.parse(event.dataTransfer.getData(MEDIA_DRAG_TYPE))
+      if (!Array.isArray(parsed)) return
+      items = parsed.filter(isMediaCollectionItem)
+    } catch { return }
+    if (!items.length || !await updateCollectionItems(collectionId, items, 'add')) return
+    selectCollection(collectionId)
+    setCollectionNotice(t('library.itemsAdded', { count: items.length }))
+  }
+  const deleteCollection = async (collection: MediaCollection) => {
+    if (!window.confirm(t('library.deleteCollectionConfirm', { name: collection.name }))) return
+    try {
+      const result = await ipc.mediaCollectionRemove(collection.id)
+      if (!result.success || !result.data) { setCollectionError(result.error || t('library.collectionError')); return }
+      setCollections(result.data)
+      if (activeCollectionId === collection.id) selectCollection('all')
+      setCollectionError('')
+    } catch (error) {
+      setCollectionError(error instanceof Error ? error.message : t('library.collectionError'))
+    }
+  }
   const confirmRemove = (destroy: boolean) => {
     if (pending?.kind === 'task') onRemove(pending.item, destroy)
     if (pending?.kind === 'local') onRemoveLocal(pending.entry, destroy)
@@ -152,7 +332,6 @@ const FileList: React.FC<FileListProps> = ({ torrent, torrents, onSelectTorrent,
   const [view, setView] = useState<'grid' | 'list'>(() => (localStorage.getItem('btviewer-library-view') === 'list' ? 'list' : 'grid'))
   const changeView = (mode: 'grid' | 'list') => { setView(mode); localStorage.setItem('btviewer-library-view', mode) }
   // 检索与排序：任务多了以后按名称/大小/最近添加/最近观看排序，并按类型或「未看完」筛选
-  const [keyword, setKeyword] = useState('')
   const [sort, setSort] = useState<SortKey>(() => (SORT_OPTIONS.some((item) => item.value === localStorage.getItem('btviewer-library-sort')) ? localStorage.getItem('btviewer-library-sort') as SortKey : 'added'))
   const [filter, setFilter] = useState<FilterKey>(() => (FILTER_OPTIONS.some((item) => item.value === localStorage.getItem('btviewer-library-filter')) ? localStorage.getItem('btviewer-library-filter') as FilterKey : 'all'))
   const changeSort = (value: SortKey) => { setSort(value); localStorage.setItem('btviewer-library-sort', value) }
@@ -205,13 +384,15 @@ const FileList: React.FC<FileListProps> = ({ torrent, torrents, onSelectTorrent,
 
   // 库列表：网格 / 紧凑列表共用同一份数据与移除确认逻辑
   const confirmRemoveCard = (item: TorrentStatus) => setPending({ kind: 'task', item })
-  const localSection = localLibrary.length > 0 && (
+  const localSection = collectionLocals.length > 0 && (
     <div className="local-library">
-      <div className="library-section-head"><span>{t('library.localSection')}</span><small>{localLibrary.length}</small></div>
+      <div className="library-section-head"><span>{t('library.localSection')}</span><small>{collectionLocals.length}</small></div>
       {view === 'grid' ? (
         <div className="torrent-grid">
-          {localLibrary.map((entry) => {
+          {collectionLocals.map((entry) => {
             const watch = localWatchMap[entry.path]
+            const mediaItem = { type: 'local' as const, id: entry.path }
+            const badges = membershipBadges(mediaItem)
             return (
               <LibraryTile
                 key={entry.path}
@@ -219,10 +400,14 @@ const FileList: React.FC<FileListProps> = ({ torrent, torrents, onSelectTorrent,
                 missing={entry.missing}
                 thumb={<VideoThumb infoHash={LOCAL_MEDIA_HASH} file={localEntryToFile(entry)} className="tile-icon" fallback={entry.type === 'audio' ? '♫' : '▶'} />}
                 title={entry.name}
-                tags={<><span className="task-type">{t('library.localTag')}</span>{entry.missing && <span className="task-error">{t('library.localMissing')}</span>}<WatchBadge watch={watch} /></>}
+                tags={<><span className="task-type">{t('library.localTag')}</span>{entry.missing && <span className="task-error">{t('library.localMissing')}</span>}{badges}<WatchBadge watch={watch} /></>}
                 progress={watchPercent(watch)}
                 meta={<span title={entry.path}>{formatSize(entry.size)}</span>}
-                onClick={() => { if (!entry.missing) onPlayLocalFile(entry) }}
+                onClick={() => toggleSelected({ type: 'local', id: entry.path })}
+                onOpen={() => { if (!entry.missing) openSelectedItem({ type: 'local', id: entry.path }, () => onPlayLocalFile(entry)) }}
+                selected={selectedKeys.has(mediaCollectionItemKey({ type: 'local', id: entry.path }))}
+                onToggleSelected={() => toggleSelected({ type: 'local', id: entry.path })}
+                onDragStart={(event) => handleMediaDragStart(event, { type: 'local', id: entry.path })}
                 onRemove={() => setPending({ kind: 'local', entry })}
                 removeTitle={t('library.removeRecord')}
               />
@@ -231,8 +416,10 @@ const FileList: React.FC<FileListProps> = ({ torrent, torrents, onSelectTorrent,
         </div>
       ) : (
         <div className="library-list">
-          {localLibrary.map((entry) => {
+          {collectionLocals.map((entry) => {
             const watch = localWatchMap[entry.path]
+            const mediaItem = { type: 'local' as const, id: entry.path }
+            const badges = membershipBadges(mediaItem)
             return (
               <LibraryRow
                 key={entry.path}
@@ -241,9 +428,14 @@ const FileList: React.FC<FileListProps> = ({ torrent, torrents, onSelectTorrent,
                 thumb={<VideoThumb infoHash={LOCAL_MEDIA_HASH} file={localEntryToFile(entry)} className="row-icon" fallback={entry.type === 'audio' ? '♫' : '▶'} />}
                 title={entry.name}
                 sub={<>{t('library.localTag')} · {formatSize(entry.size)}{entry.missing ? ` · ${t('library.localMissing')}` : ''}</>}
+                collectionBadges={badges.length > 0 && <div className="row-collection-badges">{badges}</div>}
                 progress={watchPercent(watch)}
                 trailing={<WatchBadge watch={watch} />}
-                onClick={() => { if (!entry.missing) onPlayLocalFile(entry) }}
+                onClick={() => toggleSelected({ type: 'local', id: entry.path })}
+                onOpen={() => { if (!entry.missing) openSelectedItem({ type: 'local', id: entry.path }, () => onPlayLocalFile(entry)) }}
+                selected={selectedKeys.has(mediaCollectionItemKey({ type: 'local', id: entry.path }))}
+                onToggleSelected={() => toggleSelected({ type: 'local', id: entry.path })}
+                onDragStart={(event) => handleMediaDragStart(event, { type: 'local', id: entry.path })}
                 onRemove={() => setPending({ kind: 'local', entry })}
                 removeTitle={t('library.removeRecord')}
               />
@@ -267,7 +459,7 @@ const FileList: React.FC<FileListProps> = ({ torrent, torrents, onSelectTorrent,
   // 检索/筛选/排序：排序键含「最近添加」（addedAt）与「最近观看」（观看进度更新时间）
   const visible = useMemo(() => {
     const text = keyword.trim().toLowerCase()
-    const matched = torrents.filter((item) => {
+    const matched = collectionTorrents.filter((item) => {
       if (text && !item.name.toLowerCase().includes(text)) return false
       if (filter === 'video') return item.files.some((file) => file.type === 'video')
       if (filter === 'audio') return !item.files.some((file) => file.type === 'video') && item.files.some((file) => file.type === 'audio')
@@ -280,7 +472,40 @@ const FileList: React.FC<FileListProps> = ({ torrent, torrents, onSelectTorrent,
     else if (sort === 'watched') sorted.sort((a, b) => (watchMap[b.infoHash]?.updatedAt || 0) - (watchMap[a.infoHash]?.updatedAt || 0))
     else sorted.sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0))
     return sorted
-  }, [torrents, keyword, filter, sort, watchMap])
+  }, [collectionTorrents, keyword, filter, sort, watchMap])
+  const visibleMediaItems: MediaCollectionItem[] = [
+    ...visible.map((item) => ({ type: 'task' as const, id: item.infoHash })),
+    ...collectionLocals.map((entry) => ({ type: 'local' as const, id: entry.path }))
+  ]
+  const visibleKeys = visibleMediaItems.map(mediaCollectionItemKey)
+  const visibleSelectedCount = visibleKeys.filter((key) => selectedKeys.has(key)).length
+  const allVisibleSelected = visibleKeys.length > 0 && visibleSelectedCount === visibleKeys.length
+  const selectionControlRef = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    if (selectionControlRef.current) selectionControlRef.current.indeterminate = visibleSelectedCount > 0 && !allVisibleSelected
+  }, [allVisibleSelected, visibleSelectedCount])
+  const toggleVisibleSelection = () => {
+    setSelectedKeys((current) => {
+      const next = new Set(current)
+      const shouldSelect = !visibleKeys.every((key) => next.has(key))
+      for (const key of visibleKeys) {
+        if (shouldSelect) next.add(key)
+        else next.delete(key)
+      }
+      return next
+    })
+  }
+  const addSelectedToCollection = async () => {
+    const collection = collections.find((entry) => entry.id === targetCollectionId)
+    if (!collection || !await updateCollectionItems(collection.id, selectedItems, 'add')) return
+    setCollectionNotice(t('library.itemsAdded', { count: selectedItems.length }))
+    setSelectedKeys(new Set())
+  }
+  const removeSelectedFromCollection = async () => {
+    if (!activeCollection || !await updateCollectionItems(activeCollection.id, selectedItems, 'remove')) return
+    setCollectionNotice(t('library.itemsRemoved', { count: selectedItems.length, name: activeCollection.name }))
+    setSelectedKeys(new Set())
+  }
 
   // 继续观看：看过但没看完的任务与本地视频合并，按最近观看时间排序
   type ResumeCard = { key: string; name: string; watch: WatchProgress | null; thumb: React.ReactNode; resume: () => void }
@@ -309,21 +534,6 @@ const FileList: React.FC<FileListProps> = ({ torrent, torrents, onSelectTorrent,
       <div className="page-content">
         <div className="page-heading">
           <div><span className="eyebrow">{t('library.eyebrow')}</span><h2>{t('library.title')}</h2><p>{t('library.subtitle')}</p></div>
-          <div className="heading-side">
-            <button className="small-button library-import" onClick={onImportLocal}>
-              <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <rect x="2.75" y="4.75" width="10.5" height="10.5" rx="2" />
-                <path d="M6.5 7.75L10.25 10L6.5 12.25Z" fill="currentColor" stroke="none" />
-                <path d="M16.25 7.25v5.5M13.5 10h5.5" />
-              </svg>
-              <span>{t('library.importLocal')}</span>
-            </button>
-            {!!torrents.length && <span className="heading-count">{torrents.length.toString().padStart(2, '0')}</span>}
-            <div className="view-toggle" role="tablist">
-              <button role="tab" aria-selected={view === 'grid'} className={view === 'grid' ? 'is-active' : ''} onClick={() => changeView('grid')} title={t('library.gridView')}>⊞</button>
-              <button role="tab" aria-selected={view === 'list'} className={view === 'list' ? 'is-active' : ''} onClick={() => changeView('list')} title={t('library.listView')}>☰</button>
-            </div>
-          </div>
         </div>
         {resumeCards.length > 0 && (
           <div className="resume-strip">
@@ -340,60 +550,153 @@ const FileList: React.FC<FileListProps> = ({ torrent, torrents, onSelectTorrent,
             </div>
           </div>
         )}
-        {!!torrents.length && (
-          <div className="library-tools library-filters">
-            <label className="search-box"><span>⌕</span><input value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder={t('library.search')} /></label>
-            <div className="library-filter-controls">
-              <select value={sort} onChange={(event) => changeSort(event.target.value as SortKey)} aria-label={t('library.sort')}>
-                {SORT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{t(option.labelKey)}</option>)}
-              </select>
-              <select value={filter} onChange={(event) => changeFilter(event.target.value as FilterKey)} aria-label={t('library.filter')}>
-                {FILTER_OPTIONS.map((option) => <option key={option.value} value={option.value}>{t(option.labelKey)}</option>)}
-              </select>
-              <span>{visible.length} / {torrents.length}</span>
+        <div className="library-browser">
+          <aside className="library-sidebar">
+            <div className="library-sidebar-head">
+              <strong>{t('library.collections')}</strong>
+              <button className="sidebar-create" title={t('library.createCollection')} aria-label={t('library.createCollection')} onClick={() => { setCollectionError(''); setCollectionDialog({ mode: 'create' }) }}>＋</button>
             </div>
-          </div>
-        )}
-        {!torrents.length && !localLibrary.length
-          ? <div className="empty-state"><span>▣</span><strong>{t('library.empty')}</strong><p>{t('library.emptyHint')}</p></div>
-          : !torrents.length
-            ? null
-            : !visible.length
-            ? <div className="empty-state"><span>⌕</span><strong>{t('library.noMatch')}</strong><p>{t('library.noMatchHint')}</p></div>
-            : view === 'grid'
-            ? <div className="torrent-grid">{visible.map((item) => {
-              const watch = watchMap[item.infoHash]
-              return (
-                <LibraryTile
-                  key={item.infoHash}
-                  thumb={<VideoThumb infoHash={item.infoHash} file={playableFile(item)} className="tile-icon" fallback={placeholderIcon(item)} />}
-                  title={item.name}
-                  tags={<><span className="task-type">{typeLabel(taskType(item))}</span>{episodeSummary(item) && <span className="episode-tag">{episodeSummary(item)}</span>}<WatchBadge watch={watch} /></>}
-                  progress={watchPercent(watch)}
-                  meta={metaLine(item)}
-                  onClick={() => onSelectTorrent(item)}
-                  onRemove={() => confirmRemoveCard(item)}
-                  removeTitle={t('downloads.remove')}
-                />
-              )
-            })}</div>
-            : <div className="library-list">{visible.map((item) => {
-              const watch = watchMap[item.infoHash]
-              return (
-                <LibraryRow
-                  key={item.infoHash}
-                  thumb={<VideoThumb infoHash={item.infoHash} file={playableFile(item)} className="row-icon" fallback={placeholderIcon(item)} />}
-                  title={item.name}
-                  sub={<>{metaLine(item)}{episodeSummary(item) ? ` · ${episodeSummary(item)}` : ''}</>}
-                  progress={watchPercent(watch)}
-                  trailing={<WatchBadge watch={watch} />}
-                  onClick={() => onSelectTorrent(item)}
-                  onRemove={() => confirmRemoveCard(item)}
-                  removeTitle={t('downloads.remove')}
-                />
-              )
-            })}</div>}
-        {localSection}
+            <nav className="collection-nav">
+              <button className={`collection-nav-item ${activeCollectionId === 'all' ? 'is-active' : ''}`} onClick={() => selectCollection('all')}>
+                <span className="collection-nav-icon">▦</span><span className="collection-nav-name">{t('library.allItems')}</span><small>{allMediaItems.length}</small>
+              </button>
+              <button className={`collection-nav-item ${activeCollectionId === 'ungrouped' ? 'is-active' : ''}`} onClick={() => selectCollection('ungrouped')}>
+                <span className="collection-nav-icon">◇</span><span className="collection-nav-name">{t('library.ungrouped')}</span><small>{ungroupedCount}</small>
+              </button>
+              {collections.length > 0 && <div className="collection-nav-divider" />}
+              {collections.map((collection) => (
+                <div
+                  key={collection.id}
+                  className={`collection-nav-row ${activeCollectionId === collection.id ? 'is-active' : ''} ${dropTargetId === collection.id ? 'is-drop-target' : ''}`}
+                  onDragOver={(event) => handleCollectionDragOver(event, collection.id)}
+                  onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropTargetId(null) }}
+                  onDrop={(event) => void handleCollectionDrop(event, collection.id)}
+                >
+                  <button className="collection-nav-item" onClick={() => selectCollection(collection.id)}>
+                    <span className="collection-nav-icon">▱</span><span className="collection-nav-name">{collection.name}</span><small>{collectionItemCount(collection)}</small>
+                  </button>
+                  <div className="collection-nav-actions">
+                    <button title={t('library.renameCollection')} aria-label={t('library.renameCollection')} onClick={(event) => { event.stopPropagation(); setCollectionError(''); setCollectionDialog({ mode: 'rename', collection }) }}>✎</button>
+                    <button title={t('library.deleteCollection')} aria-label={t('library.deleteCollection')} onClick={(event) => { event.stopPropagation(); void deleteCollection(collection) }}>×</button>
+                  </div>
+                </div>
+              ))}
+            </nav>
+            <p className="collection-sidebar-hint">{t('library.dragHint')}</p>
+          </aside>
+          <section className="library-browser-main">
+            <div className="library-content-heading">
+              <div><span className="eyebrow">{t('library.collections')}</span><h3>{activeCollection?.name || (activeCollectionId === 'ungrouped' ? t('library.ungrouped') : t('library.allItems'))}</h3><small>{t('library.itemCount', { count: activeCollection ? collectionItemCount(activeCollection) : activeCollectionId === 'ungrouped' ? ungroupedCount : allMediaItems.length })}</small></div>
+              <button className="small-button library-import" onClick={onImportLocal}>
+                <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <rect x="2.75" y="4.75" width="10.5" height="10.5" rx="2" />
+                  <path d="M6.5 7.75L10.25 10L6.5 12.25Z" fill="currentColor" stroke="none" />
+                  <path d="M16.25 7.25v5.5M13.5 10h5.5" />
+                </svg>
+                <span>{t('library.importLocal')}</span>
+              </button>
+              <div className="view-toggle" role="tablist">
+                <button role="tab" aria-selected={view === 'grid'} className={view === 'grid' ? 'is-active' : ''} onClick={() => changeView('grid')} title={t('library.gridView')}>⊞</button>
+                <button role="tab" aria-selected={view === 'list'} className={view === 'list' ? 'is-active' : ''} onClick={() => changeView('list')} title={t('library.listView')}>☰</button>
+              </div>
+            </div>
+            {!!(torrents.length || localLibrary.length) && (
+              <div className="library-tools library-filters">
+                <label className="search-box"><span>⌕</span><input value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder={t('library.search')} /></label>
+                <div className="library-filter-controls">
+                  <select value={sort} onChange={(event) => changeSort(event.target.value as SortKey)} aria-label={t('library.sort')}>
+                    {SORT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{t(option.labelKey)}</option>)}
+                  </select>
+                  <select value={filter} onChange={(event) => changeFilter(event.target.value as FilterKey)} aria-label={t('library.filter')}>
+                    {FILTER_OPTIONS.map((option) => <option key={option.value} value={option.value}>{t(option.labelKey)}</option>)}
+                  </select>
+                </div>
+              </div>
+            )}
+            {(visibleMediaItems.length > 0 || selectedItems.length > 0) && <div className="library-selection-toolbar">
+              <label><input ref={selectionControlRef} type="checkbox" checked={allVisibleSelected} onChange={toggleVisibleSelection} />{selectedItems.length ? t('library.selectedCount', { count: selectedItems.length }) : t('library.selectVisible')}</label>
+              {selectedItems.length > 0 && <div className="library-bulk-actions">
+                <select value={targetCollectionId} onChange={(event) => setTargetCollectionId(event.target.value)} aria-label={t('library.addToCollection')}>
+                  <option value="">{t('library.addToCollection')}</option>
+                  {collections.map((collection) => <option key={collection.id} value={collection.id}>{collection.name}</option>)}
+                </select>
+                <button className="small-button" disabled={!targetCollectionId} onClick={() => void addSelectedToCollection()}>{t('library.addSelected')}</button>
+                {activeCollection && <button className="small-button danger" onClick={() => void removeSelectedFromCollection()}>{t('library.removeFromCollection')}</button>}
+                <button className="text-action" onClick={() => setSelectedKeys(new Set())}>{t('library.clearSelection')}</button>
+              </div>}
+            </div>}
+            {collectionError && !collectionDialog && <p className="field-error">{collectionError}</p>}
+            {collectionNotice && <p className="collection-notice" role="status">{collectionNotice}</p>}
+            {!visible.length && !collectionLocals.length && (
+              activeCollection
+                ? collectionItemCount(activeCollection) === 0
+                  ? <div className="empty-state"><span>▣</span><strong>{t('library.collectionEmpty')}</strong><p>{t('library.collectionEmptyHint')}</p></div>
+                  : <div className="empty-state"><span>⌕</span><strong>{t('library.noMatch')}</strong><p>{t('library.noMatchHint')}</p></div>
+                : activeCollectionId === 'ungrouped'
+                  ? ungroupedCount === 0
+                    ? <div className="empty-state"><span>▣</span><strong>{t('library.noUngrouped')}</strong><p>{t('library.noUngroupedHint')}</p></div>
+                    : <div className="empty-state"><span>⌕</span><strong>{t('library.noMatch')}</strong><p>{t('library.noMatchHint')}</p></div>
+                  : !torrents.length && !localLibrary.length
+                    ? <div className="empty-state"><span>▣</span><strong>{t('library.empty')}</strong><p>{t('library.emptyHint')}</p></div>
+                    : <div className="empty-state"><span>⌕</span><strong>{t('library.noMatch')}</strong><p>{t('library.noMatchHint')}</p></div>
+            )}
+            {visible.length > 0 && (view === 'grid'
+              ? <div className="torrent-grid">{visible.map((item) => {
+                const watch = watchMap[item.infoHash]
+                const collectionItem = { type: 'task' as const, id: item.infoHash }
+                const badges = membershipBadges(collectionItem)
+                return (
+                  <LibraryTile
+                    key={item.infoHash}
+                    thumb={<VideoThumb infoHash={item.infoHash} file={playableFile(item)} className="tile-icon" fallback={placeholderIcon(item)} />}
+                    title={item.name}
+                    tags={<><span className="task-type">{typeLabel(taskType(item))}</span>{episodeSummary(item) && <span className="episode-tag">{episodeSummary(item)}</span>}{badges}<WatchBadge watch={watch} /></>}
+                    progress={watchPercent(watch)}
+                    meta={metaLine(item)}
+                    onClick={() => toggleSelected(collectionItem)}
+                    onOpen={() => openSelectedItem(collectionItem, () => onSelectTorrent(item))}
+                    selected={selectedKeys.has(mediaCollectionItemKey(collectionItem))}
+                    onToggleSelected={() => toggleSelected(collectionItem)}
+                    onDragStart={(event) => handleMediaDragStart(event, collectionItem)}
+                    onRemove={() => confirmRemoveCard(item)}
+                    removeTitle={t('downloads.remove')}
+                  />
+                )
+              })}</div>
+              : <div className="library-list">{visible.map((item) => {
+                const watch = watchMap[item.infoHash]
+                const collectionItem = { type: 'task' as const, id: item.infoHash }
+                const badges = membershipBadges(collectionItem)
+                return (
+                  <LibraryRow
+                    key={item.infoHash}
+                    thumb={<VideoThumb infoHash={item.infoHash} file={playableFile(item)} className="row-icon" fallback={placeholderIcon(item)} />}
+                    title={item.name}
+                    sub={<>{metaLine(item)}{episodeSummary(item) ? ` · ${episodeSummary(item)}` : ''}</>}
+                    collectionBadges={badges.length > 0 && <div className="row-collection-badges">{badges}</div>}
+                    progress={watchPercent(watch)}
+                    trailing={<WatchBadge watch={watch} />}
+                    onClick={() => toggleSelected(collectionItem)}
+                    onOpen={() => openSelectedItem(collectionItem, () => onSelectTorrent(item))}
+                    selected={selectedKeys.has(mediaCollectionItemKey(collectionItem))}
+                    onToggleSelected={() => toggleSelected(collectionItem)}
+                    onDragStart={(event) => handleMediaDragStart(event, collectionItem)}
+                    onRemove={() => confirmRemoveCard(item)}
+                    removeTitle={t('downloads.remove')}
+                  />
+                )
+              })}</div>)}
+            {localSection}
+          </section>
+        </div>
+        {collectionDialog && <MediaCollectionDialog
+          key={`${collectionDialog.mode}-${collectionDialog.mode === 'rename' ? collectionDialog.collection.id : ''}`}
+          mode={collectionDialog.mode}
+          name={collectionDialog.mode === 'rename' ? collectionDialog.collection.name : ''}
+          error={collectionError}
+          onSave={(value) => saveCollectionDialog(collectionDialog, value)}
+          onClose={() => { setCollectionDialog(null); setCollectionError('') }}
+        />}
         <ConfirmDialog
           open={!!pending}
           message={pending?.kind === 'task' ? t('library.removeConfirm', { name: pending.item.name }) : pending ? t('library.removeLocalConfirm', { name: pending.entry.name }) : ''}

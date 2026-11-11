@@ -4,10 +4,37 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 import { Resvg } from '@resvg/resvg-js'
 
+const source = readFileSync('resources/霓虹绿媒体下载播放器图标.png')
+const width = source.readUInt32BE(16)
+const height = source.readUInt32BE(20)
+const image = `<image width="${width}" height="${height}" href="data:image/png;base64,${source.toString('base64')}"/>`
+const original = new Resvg(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">${image}</svg>`, { font: { loadSystemFonts: false } }).render()
+const pixels = original.pixels
+let left = width, top = height, right = -1, bottom = -1
+for (let y = 0; y < height; y++) {
+  for (let x = 0; x < width; x++) {
+    if (pixels[(y * width + x) * 4 + 3] <= 8) continue
+    left = Math.min(left, x)
+    top = Math.min(top, y)
+    right = Math.max(right, x)
+    bottom = Math.max(bottom, y)
+  }
+}
+if (right < left || bottom < top) throw new Error('Source icon contains no visible artwork')
+const artworkWidth = right - left + 1
+const artworkHeight = bottom - top + 1
+const extent = Math.ceil(Math.max(artworkWidth, artworkHeight) / .875)
+const viewX = left + (artworkWidth - extent) / 2
+const viewY = top + (artworkHeight - extent) / 2
+writeFileSync('resources/logo.svg', `<svg width="512" height="512" viewBox="${viewX} ${viewY} ${extent} ${extent}" xmlns="http://www.w3.org/2000/svg">
+  <defs><clipPath id="artwork"><rect x="${left}" y="${top}" width="${artworkWidth}" height="${artworkHeight}"/></clipPath></defs>
+  <g clip-path="url(#artwork)">${image}</g>
+</svg>
+`)
 const svg = readFileSync('resources/logo.svg')
 
 function renderPng(size) {
-  return new Resvg(svg, { fitTo: { mode: 'width', value: size }, background: 'rgba(0,0,0,0)' }).render().asPng()
+  return new Resvg(svg, { font: { loadSystemFonts: false }, fitTo: { mode: 'width', value: size }, background: 'rgba(0,0,0,0)' }).render().asPng()
 }
 
 writeFileSync('resources/icon.png', renderPng(512))
@@ -53,6 +80,6 @@ function buildIcns(sizes) {
   header.writeUInt32BE(body.length + 8, 4)
   return Buffer.concat([header, body])
 }
-writeFileSync('resources/icon.icns', buildIcns([['ic09', 512], ['ic08', 256], ['ic07', 128]]))
+writeFileSync('resources/icon.icns', buildIcns([['ic10', 1024], ['ic09', 512], ['ic08', 256], ['ic07', 128], ['icp6', 64], ['icp5', 32], ['icp4', 16]]))
 
-console.log('icons generated: icon.png / icon.ico / icon.icns')
+console.log('icons generated: logo.svg / icon.png / icon.ico / icon.icns')

@@ -26,6 +26,18 @@ export interface LocalMediaEntry {
   missing?: boolean
 }
 
+export interface MediaCollectionItem {
+  type: 'task' | 'local'
+  id: string
+}
+
+export interface MediaCollection {
+  id: string
+  name: string
+  createdAt: number
+  items: MediaCollectionItem[]
+}
+
 export type TorrentStatusType = 'parsing' | 'connecting' | 'downloading' | 'seeding' | 'paused' | 'error'
 
 // 任务协议类型：bt（磁力/torrent）、http/ftp（直链）、metalink、video（yt-dlp 视频站点）
@@ -263,6 +275,11 @@ export type IPCChannel =
   | 'torrent:resume'
   | 'torrent:all-status'
   | 'torrent:get-stream-url'
+  | 'media-collections:list'
+  | 'media-collections:create'
+  | 'media-collections:rename'
+  | 'media-collections:remove'
+  | 'media-collections:update-items'
   | 'ytdlp:check'
   | 'ytdlp:install'
   | 'ytdlp:update'

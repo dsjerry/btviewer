@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react'
+import AppIcon from './AppIcon'
 import { ipc } from '../services/ipc'
 import type { InstallCapabilities, LogEntry, LogFileInfo } from '../services/ipc'
 import { t } from '../services/i18n'
@@ -583,7 +584,7 @@ const Settings: React.FC<{ theme: ThemeMode; onThemeChange: (mode: ThemeMode) =>
           </div>
           {notice && <div className={`inline-notice ${notice.type}`}>{notice.type === 'error' ? '!' : '✓'} {notice.text}</div>}
           <div className="about-card">
-            <svg className="about-logo" viewBox="0 0 512 512" aria-label="BTViewer"><rect width="512" height="512" rx="112" fill="#1e1f17"/><rect x="151" y="151" width="210" height="210" rx="34" transform="rotate(45 256 256)" fill="#d8f36a"/><path d="M 219 190 L 343 256 L 219 322 Z" fill="#131309"/></svg>
+            <AppIcon className="about-logo" />
             <div className="about-main">
               <div className="about-title">BTViewer <small>v{pkg.version}</small></div>
               <p>{pkg.description}</p>

@@ -18,6 +18,12 @@ npm test           # vitest（纯函数单测）
 - `electron/ytdlp-engine.ts`：yt-dlp 探测/下载的纯函数（进度与元信息解析、二进制/JS 运行时探测、格式选择）——可单测的部分尽量放这里。
 - `electron/torrent-engine.ts`：任务编排、协议分流与降级序列（BT / 直链 / 视频站点）。
 
+## 图标资源
+
+- `resources/霓虹绿媒体下载播放器图标.png` 是图标唯一母版，保留原图不直接修改；运行 `node scripts/generate-icons.mjs` 同步生成 PNG、ICO、ICNS 及 `logo.svg`。`logo.svg` 是嵌入原始 PNG 的封装，不是矢量重绘。
+- 生成流程使用已有 `@resvg/resvg-js`，根据 alpha > 8 的主体边界规整透明留白，图案最长边占画布约 87.5%；界面通过 `src/components/AppIcon.tsx` 引用生成的 `resources/icon.png`。
+- `tests/icons.test.ts` 校验原图嵌入、各平台资源一致性、macOS 1024px 及透明边距；无需加载系统字体。
+
 ## YouTube 解析要点（易踩坑）
 
 - yt-dlp 2025+ 解 YouTube `n` 签名挑战需要外部 JS 运行时，通过 `--js-runtimes` 传入；版本门槛 deno≥2.3、node≥22（bun 已废弃）；缺失时带 Cookies 会报 `n challenge solving failed`（Video unavailable / 只能 360p）。
