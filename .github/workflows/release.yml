@@ -31,10 +31,12 @@ jobs:
           - os: macos-15
             args: --mac --arm64
     runs-on: ${{ matrix.os }}
-    # 签名/公证凭据当 secrets 注入：没配时 electron-builder 自动跳过，包照样产出（用户需手动放行）
+    # 公证凭据直接注入：缺省时 electron-builder 自动跳过 notarize（两个变量都为空时走 skip 分支）。
+    # CSC_LINK / CSC_KEY_PASSWORD 不能这样注入：secret 未配置时这里是空字符串，而 electron-builder
+    # 把空字符串当作「显式提供的证书路径」，path.resolve 后指向项目目录，报 `not a file` 直接失败；
+    # CSC_IDENTITY_AUTO_DISCOVERY=false 也拦不住（它只管钥匙串身份发现，不管显式 CSC_LINK）。
+    # 所以证书凭据只在真配置了 secret 时才写入环境，见下方步骤。
     env:
-      CSC_LINK: ${{ secrets.CSC_LINK }}
-      CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
       APPLE_ID: ${{ secrets.APPLE_ID }}
       APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
       APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -44,11 +46,26 @@ jobs:
         with:
           node-version: 20
           cache: npm
-      # 没有签名证书时显式关掉自动发现，避免 electron-builder 在 mac 上尝试签名并报错
-      - name: 关闭签名自动发现（未配置证书时）
-        if: ${{ env.CSC_LINK == '' }}
+      # 配置了 Developer ID 证书才注入 CSC_LINK / CSC_KEY_PASSWORD（GITHUB_ENV 对后续步骤生效）；
+      # 未配置时不写 CSC_LINK（保持未定义），并显式关闭签名自动发现，走后面的 ad-hoc 签名兜底
+      - name: 配置签名凭据（未配置证书时关闭签名）
         shell: bash
-        run: echo "CSC_IDENTITY_AUTO_DISCOVERY=false" >> "$GITHUB_ENV"
+        env:
+          CSC_LINK_SECRET: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD_SECRET: ${{ secrets.CSC_KEY_PASSWORD }}
+        run: |
+          if [ -n "$CSC_LINK_SECRET" ]; then
+            {
+              echo "CSC_LINK<<CSC_LINK_EOF"
+              echo "$CSC_LINK_SECRET"
+              echo "CSC_LINK_EOF"
+            } >> "$GITHUB_ENV"
+            if [ -n "$CSC_KEY_PASSWORD_SECRET" ]; then
+              echo "CSC_KEY_PASSWORD=$CSC_KEY_PASSWORD_SECRET" >> "$GITHUB_ENV"
+            fi
+          else
+            echo "CSC_IDENTITY_AUTO_DISCOVERY=false" >> "$GITHUB_ENV"
+          fi
       - name: 校验内置二进制架构（macOS）
         if: startsWith(matrix.os, 'macos')
         shell: bash
