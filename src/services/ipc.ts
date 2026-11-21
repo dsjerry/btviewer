@@ -78,6 +78,7 @@ export interface ElectronAPI {
   openExternal: (url: string) => Promise<IPCResult>
   onStatusUpdate: (callback: (status: TorrentStatus) => void) => () => void
   onOpenInput: (callback: (input: string) => void) => () => void
+  onOpenMedia: (callback: (paths: string[]) => void) => () => void
   onGlobalStat: (callback: (stat: GlobalStat) => void) => () => void
   onFocusTask: (callback: (infoHash: string) => void) => () => void
   onClipboardInput: (callback: (input: string) => void) => () => void
@@ -183,6 +184,7 @@ export const ipc: ElectronAPI = {
   openExternal: (url) => getElectronAPI().openExternal(url),
   onStatusUpdate: (callback) => getElectronAPI().onStatusUpdate(callback),
   onOpenInput: (callback) => getElectronAPI().onOpenInput(callback),
+  onOpenMedia: (callback) => getElectronAPI().onOpenMedia(callback),
   onGlobalStat: (callback) => getElectronAPI().onGlobalStat(callback),
   onFocusTask: (callback) => getElectronAPI().onFocusTask(callback),
   onClipboardInput: (callback) => getElectronAPI().onClipboardInput(callback),

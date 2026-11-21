@@ -41,6 +41,7 @@ BT 与直链下载不需要 yt-dlp。视频站点和 HLS 的可选依赖可在�
 - [安装与打包](./docs/INSTALLATION.md)
 - [开发、测试与项目结构](./docs/DEVELOPMENT.md)
 - [视频站点与 YouTube 画质](./docs/video-sites.md)
+- [文件关联与外部打开](./docs/file-associations.md)
 - [测试指南与示例磁力](./docs/TESTING.md)
 - [常见问题](./docs/TROUBLESHOOTING.md)
 - [贡献指南](./CONTRIBUTING.md)

@@ -98,6 +98,12 @@ const electronAPI: ElectronAPI = {
     ipcRenderer.on('app:open-input', listener)
     return () => ipcRenderer.removeListener('app:open-input', listener)
   },
+  // Finder「打开方式」/ 双击视频音频：主进程批量推送媒体路径
+  onOpenMedia: (callback) => {
+    const listener = (_event: Electron.IpcRendererEvent, paths: unknown) => callback(Array.isArray(paths) ? paths.map((p) => String(p ?? '')).filter(Boolean) : [])
+    ipcRenderer.on('app:open-media', listener)
+    return () => ipcRenderer.removeListener('app:open-media', listener)
+  },
   // 全局统计推送（侧边栏速度）
   onGlobalStat: (callback) => {
     const listener = (_event: Electron.IpcRendererEvent, stat: unknown) => callback(stat as GlobalStat)

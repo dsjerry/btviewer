@@ -199,6 +199,10 @@ const App: React.FC = () => {
       setDownloadsOpen(false)
     } catch (error) { setLoadError(error instanceof Error ? error.message : t('app.localPickFailed')) }
   }, [])
+  // Finder「打开方式」/ 双击媒体文件（C1）：主进程收到的媒体路径导入本地库后直接播放
+  useEffect(() => {
+    try { return ipc.onOpenMedia((paths) => { if (paths.length) void importAndPlay(paths) }) } catch { return () => undefined }
+  }, [importAndPlay])
   // 从媒体库点播本地视频
   const playLocalEntry = useCallback((entry: LocalMediaEntry) => {
     setSelectedHash(null)

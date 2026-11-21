@@ -79,6 +79,104 @@ mac:
       - CFBundleURLName: Magnet Link
         CFBundleURLSchemes:
           - magnet
+    # 视频音频文件关联：macOS「打开方式」列表依据 CFBundleDocumentTypes（LSHandlerRank=Default
+    # 才会作为候选 app 列出）。mkv/webm/wmv/flv/ogg/flac 系统没有内置 UTI，必须先在
+    # UTImportedTypeDeclarations 导入类型、再用 LSItemContentTypes 引用，只写扩展名在「打开方式」里不可靠。
+    # 声明在打包期写入 Info.plist：只有重新打包安装后才可见（开发态 electron.app 不带本声明）；
+    # 装好后 LaunchServices 若仍不刷新，执行
+    #   /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f <app路径>
+    CFBundleDocumentTypes:
+      - name: Video Media
+        CFBundleTypeName: 视频文件
+        CFBundleTypeRole: Viewer
+        LSHandlerRank: Default
+        LSItemContentTypes:
+          - public.mpeg-4
+          - com.apple.m4v-video
+          - com.apple.quicktime-movie
+          - public.avi
+          - public.mpeg
+          - public.mpeg-2-transport-stream
+          - org.matroska.mkv
+          - org.webmproject.webm
+          - com.microsoft.windows-media-wmv
+          - com.adobe.flash-video
+        CFBundleTypeExtensions:
+          - mp4
+          - m4v
+          - mkv
+          - avi
+          - mov
+          - webm
+          - mpg
+          - mpeg
+          - m2ts
+          - ts
+          - wmv
+          - flv
+          - rmvb
+      - name: Audio Media
+        CFBundleTypeName: 音频文件
+        CFBundleTypeRole: Viewer
+        LSHandlerRank: Default
+        LSItemContentTypes:
+          - public.mp3
+          - public.mpeg-4-audio
+          - com.microsoft.waveform-audio
+          - org.xiph.flac
+          - org.xiph.ogg
+        CFBundleTypeExtensions:
+          - mp3
+          - m4a
+          - flac
+          - wav
+          - aac
+          - ogg
+          - wma
+    # 系统未内置的容器类型：导入声明让 LaunchServices 认识这些 UTI（org.* 逆向域名为社区通行约定）
+    UTImportedTypeDeclarations:
+      - UTTypeIdentifier: org.matroska.mkv
+        UTTypeDescription: Matroska Video
+        UTTypeConformsTo:
+          - public.movie
+        UTTypeTagSpecification:
+          public.filename-extension:
+            - mkv
+      - UTTypeIdentifier: org.webmproject.webm
+        UTTypeDescription: WebM Video
+        UTTypeConformsTo:
+          - public.movie
+        UTTypeTagSpecification:
+          public.filename-extension:
+            - webm
+      - UTTypeIdentifier: com.microsoft.windows-media-wmv
+        UTTypeDescription: Windows Media Video
+        UTTypeConformsTo:
+          - public.movie
+        UTTypeTagSpecification:
+          public.filename-extension:
+            - wmv
+      - UTTypeIdentifier: com.adobe.flash-video
+        UTTypeDescription: Flash Video
+        UTTypeConformsTo:
+          - public.movie
+        UTTypeTagSpecification:
+          public.filename-extension:
+            - flv
+      - UTTypeIdentifier: org.xiph.ogg
+        UTTypeDescription: Ogg Audio
+        UTTypeConformsTo:
+          - public.audio
+        UTTypeTagSpecification:
+          public.filename-extension:
+            - ogg
+      - UTTypeIdentifier: org.xiph.flac
+        UTTypeDescription: FLAC Audio
+        UTTypeConformsTo:
+          - public.audio
+        UTTypeTagSpecification:
+          public.filename-extension:
+            - flac
 linux:
   target:
     - AppImage

@@ -41,6 +41,7 @@ BT and direct downloads do not need yt-dlp. Optional dependencies for video site
 - [Installation and packaging](./docs/installation.en.md)
 - [Development, tests and project layout](./docs/development.en.md)
 - [Video sites and YouTube quality](./docs/video-sites.en.md)
+- [File associations and opening from the system](./docs/file-associations.en.md)
 - [Testing guide and sample magnets](./docs/testing.en.md)
 - [Troubleshooting](./docs/troubleshooting.en.md)
 - [Contributing](./CONTRIBUTING.md)

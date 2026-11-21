@@ -10,7 +10,7 @@ import { loadSettings, saveSettings } from './settings'
 import { getFileType, isUnderRoot, resolveAria2Binary } from './torrent-engine'
 import { addLocalMediaEntries, listLocalMedia, removeLocalMedia } from './local-media'
 import { createMediaCollection, listMediaCollections, removeMediaCollection, renameMediaCollection, updateMediaCollectionMembership } from './media-collections'
-import { collectLaunchInputs } from './launch-inputs'
+import { collectLaunchInputs, collectMediaLaunchInputs } from './launch-inputs'
 import { planPostAction } from './post-action'
 import { createClipboardWatcher } from './clipboard-watch'
 import { formatSpeed } from '../src/services/task-meta'
@@ -967,17 +967,21 @@ async function shutdown() {
 }
 
 // ── 单实例与外部输入（C1）──────────────────────────────────────────
-// 待处理的外部输入（双击种子 / 点网页磁力 / 命令行传入）：窗口就绪后立刻投递，否则排队
+// 待处理的外部输入（双击种子 / 点网页磁力 / 命令行 / Finder「打开方式」）：
+// 任务输入逐条投递，媒体文件批量投递（渲染层导入本地库后直接播放），窗口就绪前先排队
 const pendingInputs: string[] = []
+const pendingMedia: string[] = []
 let rendererReady = false
 
 function deliverInputs(inputs: string[]) {
-  const list = collectLaunchInputs(inputs)
-  if (!list.length) return
-  for (const input of list) logger.info('launch', `收到外部输入：${input.slice(0, 120)}`)
-  if (!rendererReady || !mainWindow || mainWindow.isDestroyed()) { pendingInputs.push(...list); return }
+  const tasks = collectLaunchInputs(inputs)
+  const media = collectMediaLaunchInputs(inputs)
+  if (!tasks.length && !media.length) return
+  for (const input of [...tasks, ...media]) logger.info('launch', `收到外部输入：${input.slice(0, 120)}`)
+  if (!rendererReady || !mainWindow || mainWindow.isDestroyed()) { pendingInputs.push(...tasks); pendingMedia.push(...media); return }
   showMainWindow()
-  for (const input of list) mainWindow.webContents.send('app:open-input', input)
+  for (const input of tasks) mainWindow.webContents.send('app:open-input', input)
+  if (media.length) mainWindow.webContents.send('app:open-media', media)
 }
 
 function flushPendingInputs() {
@@ -985,6 +989,10 @@ function flushPendingInputs() {
   while (pendingInputs.length) {
     const input = pendingInputs.shift()!
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('app:open-input', input)
+  }
+  if (pendingMedia.length && mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('app:open-media', pendingMedia)
+    pendingMedia.length = 0
   }
 }
 
