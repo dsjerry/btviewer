@@ -8,7 +8,7 @@ import { srtToVtt } from '../services/subtitle'
 import { episodeLabel, parseEpisode } from '../services/episode'
 import { pickAutoSubtitle, rankSubtitles, subtitleLanguage, type SubtitleCandidate } from '../services/subtitle-match'
 import { formatMark, parseMarksStore, skipDecision, updateMarksStore } from '../services/player-extras'
-import { STEREO_MENU, stereoCropRect, stereoEqual, stereoFromName, stereoDisplay, STEREO_OFF, type StereoLayout, type StereoMode, type StereoOutput, type StereoProjection } from '../services/stereo3d'
+import { stereoCropRect, stereoEqual, stereoFromName, stereoDisplay, STEREO_OFF, type StereoLayout, type StereoMode, type StereoOutput, type StereoProjection } from '../services/stereo3d'
 import { StereoGLRenderer, type StereoCamera } from '../services/stereo-gl'
 import { seriesKey } from '../services/episode'
 // 播放位置 → 字节偏移的换算与主进程共用同一实现（纯函数，无 Node 依赖）
@@ -23,7 +23,7 @@ type RemoteTrackElement = ReturnType<VjsPlayer['addRemoteTextTrack']> & { track:
 interface VjsControlButton { controlText: (text: string) => void; addClass: (cls: string) => void; removeClass: (cls: string) => void }
 type VjsControlBar = { addChild: (child: unknown, options?: unknown, index?: number) => unknown; children: () => unknown[]; getChild: (name: string) => unknown }
 // 3D 菜单（MenuButton/MenuItem）的最小接口：构造项只需 label/selectable，实例需要选中态与点击监听
-interface VjsMenuItemLike { on: (event: string, handler: () => void) => unknown; selected: (value: boolean) => void }
+interface VjsMenuItemLike { on: (event: string, handler: () => void) => unknown; selected: (value: boolean) => void; addClass: (className: string) => void }
 type VjsMenuButtonLike = VjsControlButton
 
 interface PlayerProps { infoHash: string; file: TorrentFileInfo; subtitles: TorrentFileInfo[]; playlist: PlaylistEntry[]; onSelectFile: (entry: PlaylistEntry) => void; onBack: () => void }
@@ -141,20 +141,23 @@ const Player: React.FC<PlayerProps> = ({ infoHash, file, subtitles, playlist, on
   })
   const stereoRef = useRef(stereo); stereoRef.current = stereo
   const changeStereo = (next: StereoMode) => { setStereo(next); localStorage.setItem('btviewer-stereo', JSON.stringify(next)) }
-  // 3D 菜单选项标签：球面按用途命名（全景视角 = 单眼拖拽的 VR 体验；头显分屏 = 给 VR 头显的双目画面）
-  const stereoModeLabel = (mode: StereoMode) => {
+  // 3D 菜单选项标签：布局信息由分组标题承载（平面·左右并排 / 平面·上下排列 / 球面 VR180），
+  // 条目只写输出方式；球面「左眼」按用途命名为全景视角（单眼拖拽的 VR 体验），头显分屏给 VR 头显
+  const stereoItemLabel = (mode: StereoMode) => {
     if (mode.layout === 'off') return t('player.stereoOff')
-    if (mode.projection === 'sphere') {
-      if (mode.output === 'anaglyph') return `${t('player.stereoSphere')} · ${t('player.stereoAnaglyph')}`
-      if (mode.output === 'dual') return `${t('player.stereoSphere')} · ${t('player.stereoHmd')}`
-      const eye = mode.output === 'right' ? `（${t('player.stereoRightEye')}）` : ''
-      return `${t('player.stereoSphere')} · ${t('player.stereoPanorama')}${eye}`
-    }
-    const output = mode.output === 'anaglyph' ? t('player.stereoAnaglyph') : mode.output === 'dual' ? t('player.stereoDual') : mode.output === 'left' ? t('player.stereoLeftEye') : t('player.stereoRightEye')
-    return `${t(mode.layout === 'sbs' ? 'player.stereoSbs' : 'player.stereoTb')} · ${output}`
+    if (mode.output === 'anaglyph') return t('player.stereoAnaglyph')
+    if (mode.output === 'dual') return t('player.stereoHmd')
+    if (mode.output === 'right') return t('player.stereoRightEye')
+    if (mode.projection === 'sphere') return t('player.stereoPanorama')
+    return t('player.stereoLeftEye')
+  }
+  const stereoGroupLabel = (layout: 'sbs' | 'tb' | 'sphere') => {
+    if (layout === 'sphere') return t('player.stereoSphere')
+    return `${t('player.stereoFlat')} · ${t(layout === 'sbs' ? 'player.stereoSbs' : 'player.stereoTb')}`
   }
   const stereoMenuRef = useRef<VjsMenuButtonLike | null>(null)
-  const stereoItemsRef = useRef<VjsMenuItemLike[]>([])
+  // 条目与模式的对应关系（null = 分组标题行，不参与选中态同步）
+  const stereoEntriesRef = useRef<Array<{ item: VjsMenuItemLike; mode: StereoMode | null }>>([])
   const stereoSelectRef = useRef<(mode: StereoMode) => void>(() => undefined)
   stereoSelectRef.current = changeStereo
   // 红蓝合并/球面渲染：画布盖在 <video> 上逐帧合成；视差与球面视角在拖拽中调整
@@ -496,8 +499,7 @@ const Player: React.FC<PlayerProps> = ({ infoHash, file, subtitles, playlist, on
 
   // 3D 菜单状态同步：当前模式在菜单里打勾，开启（非关闭）时按钮点亮
   useEffect(() => {
-    stereoItemsRef.current.forEach((item, index) => {
-      const mode = STEREO_MENU[index]
+    stereoEntriesRef.current.forEach(({ item, mode }) => {
       if (mode) { try { item.selected(stereoEqual(mode, stereo)) } catch { /* 组件已销毁 */ } }
     })
     const button = stereoMenuRef.current
@@ -572,27 +574,52 @@ const Player: React.FC<PlayerProps> = ({ infoHash, file, subtitles, playlist, on
           loadSubButton.addClass('vjs-btv-loadsub')
           addBeforeFullscreen(loadSubButton)
         }
-        // 3D 视角菜单：点开直接选择模式（关 / 平面左右 / 平面上下 / 球面 VR180 各输出），不再逐次循环
+        // 3D 视角菜单：按封装方式分组（关 / 平面·左右并排 / 平面·上下排列 / 球面 VR180 各输出），
+        // 点开直接选择，不再逐次循环；分组标题行（vjs-menu-title）仅作视觉分隔、不可选
         const VjsMenuButton = videojs.getComponent('MenuButton') as unknown as (new (player: VjsPlayer, options?: { title?: string; controlText?: string }) => VjsMenuButtonLike) | undefined
         const VjsMenuItem = videojs.getComponent('MenuItem') as unknown as (new (player: VjsPlayer, options?: { label?: string; selectable?: boolean; selected?: boolean }) => VjsMenuItemLike) | undefined
         if (VjsMenuButton && VjsMenuItem) {
           const items: VjsMenuItemLike[] = []
+          const entries: Array<{ item: VjsMenuItemLike; mode: StereoMode | null }> = []
           const makeItem = (mode: StereoMode) => {
-            const item = new VjsMenuItem(player, { label: stereoModeLabel(mode), selectable: true, selected: stereoEqual(mode, stereoRef.current) })
+            const item = new VjsMenuItem(player, { label: stereoItemLabel(mode), selectable: true, selected: stereoEqual(mode, stereoRef.current) })
             item.on('click', () => stereoSelectRef.current(mode))
+            item.addClass('vjs-btv-stereo-item')
             items.push(item)
-            return item
+            entries.push({ item, mode })
+          }
+          const makeGroup = (label: string) => {
+            const title = new VjsMenuItem(player, { label, selectable: false })
+            title.addClass('vjs-menu-title')
+            title.addClass('vjs-btv-stereo-group')
+            items.push(title)
+            entries.push({ item: title, mode: null })
           }
           class BtvStereoMenuButton extends VjsMenuButton {
             createItems() {
-              for (const mode of STEREO_MENU) makeItem(mode)
+              makeItem(STEREO_OFF)
+              makeGroup(stereoGroupLabel('sbs'))
+              makeItem({ layout: 'sbs', output: 'anaglyph', projection: 'flat' })
+              makeItem({ layout: 'sbs', output: 'left', projection: 'flat' })
+              makeItem({ layout: 'sbs', output: 'right', projection: 'flat' })
+              makeItem({ layout: 'sbs', output: 'dual', projection: 'flat' })
+              makeGroup(stereoGroupLabel('tb'))
+              makeItem({ layout: 'tb', output: 'anaglyph', projection: 'flat' })
+              makeItem({ layout: 'tb', output: 'left', projection: 'flat' })
+              makeItem({ layout: 'tb', output: 'right', projection: 'flat' })
+              makeItem({ layout: 'tb', output: 'dual', projection: 'flat' })
+              makeGroup(stereoGroupLabel('sphere'))
+              makeItem({ layout: 'sbs', output: 'anaglyph', projection: 'sphere' })
+              makeItem({ layout: 'sbs', output: 'left', projection: 'sphere' })
+              makeItem({ layout: 'sbs', output: 'right', projection: 'sphere' })
+              makeItem({ layout: 'sbs', output: 'dual', projection: 'sphere' })
+              stereoEntriesRef.current = entries
               return items
             }
           }
           const stereoMenu = new BtvStereoMenuButton(player, { title: t('player.stereoSection'), controlText: t('player.stereoSection') })
           stereoMenu.addClass('vjs-btv-stereo')
           stereoMenuRef.current = stereoMenu
-          stereoItemsRef.current = items
           addBeforeFullscreen(stereoMenu)
         }
         // 画中画：浏览器不支持时按钮不出现
@@ -737,7 +764,7 @@ const Player: React.FC<PlayerProps> = ({ infoHash, file, subtitles, playlist, on
       setRecording(false)
       if (recordSessionRef.current) { void ipc.recordAbort(recordSessionRef.current).catch(() => undefined); recordSessionRef.current = null }
       stereoMenuRef.current = null
-      stereoItemsRef.current = []
+      stereoEntriesRef.current = []
       // 合并渲染的画布随旧 .video-js 一起被移除，这里释放 WebGL 资源
       anaglyphRendererRef.current?.dispose()
       anaglyphRendererRef.current = null
