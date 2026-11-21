@@ -187,23 +187,6 @@ export type ThemeMode = 'light' | 'dark' | 'system'
 // 界面语言（C6）：默认中文，可切英文
 export type Language = 'zh' | 'en'
 
-// RSS 订阅条目（主进程 feeds.json 的渲染层视图）
-export interface FeedItem { guid: string; title: string; magnet: string; torrentUrl: string; pubDate?: string; downloaded?: boolean }
-
-export interface Feed {
-  id: string
-  name: string
-  url: string
-  keywords: string[]
-  autoDownload: boolean
-  groupBySeason: boolean
-  enabled: boolean
-  lastCheckedAt?: number
-  lastError?: string
-  items: FeedItem[]
-  seenGuids: string[]
-}
-
 export interface AppSettings {
   downloadDir?: string
   trackers?: string

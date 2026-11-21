@@ -5,16 +5,18 @@ import { LOCAL_MEDIA_HASH } from '../types'
 // 失败结果仅在本次会话内负缓存（文件后续下载完成可能就能截出来了），成功结果持久化到主进程
 // 顺序：内嵌封面（主进程 ffmpeg 提取）→ 视频截帧 → 图标占位
 const WIDTH = 320
+// hero 大图宽度：首页影院背景用，与 320px 海报缓存键隔离
+const HERO_WIDTH = 960
 const TIMEOUT_MS = 15000
 
 const memory = new Map<string, string | null>()
-interface Job { key: string; infoHash: string; filePath: string; callbacks: Array<(value: string | null) => void> }
+interface Job { key: string; infoHash: string; filePath: string; callbacks: Array<(value: string | null) => void>; hero: boolean }
 const queue: Job[] = []
 let pumping = false
 
-const keyOf = (infoHash: string, filePath: string) => `${infoHash}:${filePath}`
+const keyOf = (infoHash: string, filePath: string, hero = false) => `${hero ? 'hero:' : ''}${infoHash}:${filePath}`
 
-function capture(url: string): Promise<string | null> {
+function capture(url: string, width = WIDTH): Promise<string | null> {
   return new Promise((resolve) => {
     const video = document.createElement('video')
     video.muted = true
@@ -40,12 +42,12 @@ function capture(url: string): Promise<string | null> {
     video.addEventListener('seeked', () => {
       if (settled) return
       try {
-        const width = video.videoWidth
-        const height = video.videoHeight
-        if (!width || !height) { finish(null); return }
+        const sourceWidth = video.videoWidth
+        const sourceHeight = video.videoHeight
+        if (!sourceWidth || !sourceHeight) { finish(null); return }
         const canvas = document.createElement('canvas')
-        canvas.width = WIDTH
-        canvas.height = Math.max(1, Math.round((height / width) * WIDTH))
+        canvas.width = width
+        canvas.height = Math.max(1, Math.round((sourceHeight / sourceWidth) * width))
         canvas.getContext('2d')?.drawImage(video, 0, 0, canvas.width, canvas.height)
         finish(canvas.toDataURL('image/jpeg', 0.7))
       } catch { finish(null) }
@@ -71,7 +73,7 @@ async function pump() {
         try {
           // 本地视频引用走 /local 注册路由（infoHash 是合成值），下载任务走 /stream
           const url = job.infoHash === LOCAL_MEDIA_HASH ? await ipc.getLocalMediaUrl(job.filePath) : await ipc.getStreamUrl(job.infoHash, job.filePath)
-          result = await capture(url)
+          result = await capture(url, job.hero ? HERO_WIDTH : WIDTH)
         } catch { /* 任务可能已被移除，按失败处理 */ }
       }
       memory.set(job.key, result)
@@ -82,17 +84,27 @@ async function pump() {
 }
 
 // 串行队列：media 库页面可能同时出现几十个视频，避免并发截帧挤占带宽
-async function getThumbnail(infoHash: string, filePath: string): Promise<string | null> {
-  const key = keyOf(infoHash, filePath)
+async function requestThumbnail(infoHash: string, filePath: string, hero: boolean): Promise<string | null> {
+  const key = keyOf(infoHash, filePath, hero)
   if (memory.has(key)) return memory.get(key)!
   const persisted = await ipc.getThumbnails([key]).then((result) => (result.success && result.data ? result.data[0] : null)).catch(() => null)
   if (persisted) { memory.set(key, persisted); return persisted }
   return new Promise((resolve) => {
     const existing = queue.find((job) => job.key === key)
     if (existing) { existing.callbacks.push(resolve); return }
-    queue.push({ key, infoHash, filePath, callbacks: [resolve] })
+    queue.push({ key, infoHash, filePath, callbacks: [resolve], hero })
     void pump()
   })
 }
 
+async function getThumbnail(infoHash: string, filePath: string): Promise<string | null> {
+  return requestThumbnail(infoHash, filePath, false)
+}
+
+// 首页 hero 大图：960px 截帧 + 独立缓存键；超过持久层 200KB 限制时只留在内存（下次进页重新截）
+async function getHeroImage(infoHash: string, filePath: string): Promise<string | null> {
+  return requestThumbnail(infoHash, filePath, true)
+}
+
+export { getHeroImage }
 export default getThumbnail

@@ -118,22 +118,26 @@ const Player: React.FC<PlayerProps> = ({ infoHash, file, subtitles, playlist, on
   const recorderRef = useRef<MediaRecorder | null>(null)
   const recordSessionRef = useRef<string | null>(null)
   const recordTimerRef = useRef(0)
-  const recordButtonRef = useRef<VjsControlButton | null>(null)
   // 兼容播放（B1）：内置播放器解不了的编码，用 ffmpeg 生成可播放副本
   const [compat, setCompat] = useState<{ id: string | null; phase: 'idle' | 'preparing' | 'running' | 'error'; percent: number; message: string; container: 'mp4' | 'webm' }>({ id: null, phase: 'idle', percent: 0, message: '', container: 'mp4' })
   const compatRef = useRef(compat); compatRef.current = compat
-  // 3D 视角：SBS/TB 封装可切单眼/红蓝合并/球面 VR180；全局记忆，文件名带布局提示且无记忆时预选
+  // 3D 视角：SBS/TB 封装可切单眼/红蓝合并/球面 VR180。
+  // 记忆只对「文件名同样带 3D 提示」的片源生效——普通视频绝不自动套用上一场的
+  // 单眼裁剪/球面渲染（否则内容被裁半幅，看起来像画面偏向一侧且显示不全）；
+  // 布局（SBS/TB）是片源封装属性，跟随当前文件的提示，输出/投影尊重用户上次选择。
   const [stereo, setStereo] = useState<StereoMode>(() => {
+    const hinted = stereoFromName(file.name)
     try {
       const saved = localStorage.getItem('btviewer-stereo')
-      if (saved) {
+      if (saved && hinted) {
         const parsed = JSON.parse(saved) as StereoMode
         if (parsed && (parsed.layout === 'off' || parsed.layout === 'sbs' || parsed.layout === 'tb') && (parsed.output === 'left' || parsed.output === 'right' || parsed.output === 'anaglyph' || parsed.output === 'dual')) {
-          return { ...parsed, projection: parsed.projection === 'sphere' ? 'sphere' : 'flat' }
+          if (parsed.layout === 'off') return STEREO_OFF
+          return { ...parsed, layout: hinted.layout, projection: parsed.projection === 'sphere' ? 'sphere' : 'flat' }
         }
       }
     } catch { /* 忽略损坏存储 */ }
-    return stereoFromName(file.name) || STEREO_OFF
+    return hinted || STEREO_OFF
   })
   const stereoRef = useRef(stereo); stereoRef.current = stereo
   const changeStereo = (next: StereoMode) => { setStereo(next); localStorage.setItem('btviewer-stereo', JSON.stringify(next)) }
@@ -488,16 +492,7 @@ const Player: React.FC<PlayerProps> = ({ infoHash, file, subtitles, playlist, on
     recordTimerRef.current = window.setInterval(() => setRecordSeconds((value) => value + 1), 1000)
   }
 
-  // 回调经 ref 传给控制条按钮，保证按钮拿到的一直是最新处理函数
-  const snapshotRef = useRef(snapshot); snapshotRef.current = snapshot
-  const recordToggleRef = useRef<() => void>(() => undefined); recordToggleRef.current = recording ? stopRecording : () => void startRecording()
-
-  // 录制状态同步到控制条按钮（红点 + 文案）
-  useEffect(() => {
-    const button = recordButtonRef.current
-    if (!button) return
-    if (recording) { button.addClass('vjs-btv-recording'); button.controlText(t('player.recordStop')) } else { button.removeClass('vjs-btv-recording'); button.controlText(t('player.recordStart')) }
-  }, [recording, playerReady])
+  // 截图/录制按钮已移出控制条，改为播放器右缘悬浮工具（stage JSX 直接渲染，随 recording 状态切换样式）
 
   // 3D 菜单状态同步：当前模式在菜单里打勾，开启（非关闭）时按钮点亮
   useEffect(() => {
@@ -557,7 +552,7 @@ const Player: React.FC<PlayerProps> = ({ infoHash, file, subtitles, playlist, on
       // 音量/倍速变化时持久化（拖动音量条会密集触发，做节流）
       player.on('volumechange', () => { const now = Date.now(); if (now - lastVolumeSave < 400) return; lastVolumeSave = now; localStorage.setItem(VOLUME_KEY, String(player.volume() ?? 1)) })
       player.on('ratechange', () => { if (!player.isDisposed()) localStorage.setItem(RATE_KEY, String(player.playbackRate() ?? 1)) })
-      // 字幕/截图/录制按钮融入控制条（插在全屏按钮前），随控制条一起自动隐藏
+      // 字幕按钮融入控制条（插在全屏按钮前），随控制条一起自动隐藏；截图/录制在右缘悬浮工具
       try {
         const VjsButton = videojs.getComponent('Button') as unknown as new (player: VjsPlayer, options?: { onClick?: () => void }) => VjsControlButton
         class BtvControlButton extends VjsButton {
@@ -577,15 +572,6 @@ const Player: React.FC<PlayerProps> = ({ infoHash, file, subtitles, playlist, on
           loadSubButton.addClass('vjs-btv-loadsub')
           addBeforeFullscreen(loadSubButton)
         }
-        const snapshotButton = new BtvControlButton(player, { onClick: () => snapshotRef.current() })
-        snapshotButton.controlText(t('player.snapshotTitle'))
-        snapshotButton.addClass('vjs-btv-snapshot')
-        addBeforeFullscreen(snapshotButton)
-        const recordButton = new BtvControlButton(player, { onClick: () => recordToggleRef.current() })
-        recordButton.controlText(t('player.recordStart'))
-        recordButton.addClass('vjs-btv-record')
-        recordButtonRef.current = recordButton
-        addBeforeFullscreen(recordButton)
         // 3D 视角菜单：点开直接选择模式（关 / 平面左右 / 平面上下 / 球面 VR180 各输出），不再逐次循环
         const VjsMenuButton = videojs.getComponent('MenuButton') as unknown as (new (player: VjsPlayer, options?: { title?: string; controlText?: string }) => VjsMenuButtonLike) | undefined
         const VjsMenuItem = videojs.getComponent('MenuItem') as unknown as (new (player: VjsPlayer, options?: { label?: string; selectable?: boolean; selected?: boolean }) => VjsMenuItemLike) | undefined
@@ -750,7 +736,6 @@ const Player: React.FC<PlayerProps> = ({ infoHash, file, subtitles, playlist, on
       window.clearInterval(recordTimerRef.current)
       setRecording(false)
       if (recordSessionRef.current) { void ipc.recordAbort(recordSessionRef.current).catch(() => undefined); recordSessionRef.current = null }
-      recordButtonRef.current = null
       stereoMenuRef.current = null
       stereoItemsRef.current = []
       // 合并渲染的画布随旧 .video-js 一起被移除，这里释放 WebGL 资源
@@ -1026,6 +1011,6 @@ const Player: React.FC<PlayerProps> = ({ infoHash, file, subtitles, playlist, on
   <div className="subtitle-setting"><label>{t('player.fontSize')}</label><input type="range" min={0.6} max={2} step={0.1} value={cueStyle.scale} onChange={(event) => updateCueStyle({ scale: Number(event.target.value) })} /><span>{Math.round(cueStyle.scale * 100)}%</span></div>
   <div className="subtitle-setting"><label>{t('player.position')}</label><input type="range" min={0} max={30} step={1} value={cueStyle.bottom} onChange={(event) => updateCueStyle({ bottom: Number(event.target.value) })} /><span>{cueStyle.bottom}%</span></div>
   <div className="subtitle-setting"><label>{t('player.background')}</label><input type="range" min={0} max={90} step={5} value={cueStyle.bg} onChange={(event) => updateCueStyle({ bg: Number(event.target.value) })} /><span>{cueStyle.bg}%</span></div>
-</div>}</header><input ref={subtitleInputRef} type="file" accept=".srt,.vtt,text/vtt" hidden onChange={(event) => { loadLocalSubtitle(event.target.files); event.target.value = '' }} /><div className="player-stage" style={{ '--cue-scale': cueStyle.scale, '--cue-bottom': `${cueStyle.bottom}%`, '--cue-bg': `rgba(0,0,0,${cueStyle.bg / 100})` } as React.CSSProperties}><div ref={containerRef} className="player-container" />{loading && compat.phase !== 'running' && compat.phase !== 'preparing' && <div className="player-overlay"><div className="loading-spinner" /><span>{statusText}</span></div>}{(compat.phase === 'preparing' || compat.phase === 'running') && <div className="player-overlay"><div className="loading-spinner" /><span>{compat.phase === 'preparing' ? t('player.compatPreparing') : t('player.compatRunning', { percent: compat.percent })}</span><small className="compat-reason">{compat.message}</small><button className="secondary-action" onClick={cancelCompatPlayback}>{t('player.cancel')}</button></div>}{error && compat.phase !== 'running' && compat.phase !== 'preparing' && <div className="player-overlay player-error"><span>{error}</span><div className="player-error-actions"><button className="secondary-action" onClick={() => void startCompatPlayback()}>{t('player.compatButton')}</button><button className="secondary-action" onClick={onBack}>{t('player.backToLibrary')}</button></div></div>}{compat.phase === 'error' && <div className="player-overlay player-error"><span>{compat.message}</span><div className="player-error-actions"><button className="secondary-action" onClick={() => setCompat((prev) => ({ ...prev, phase: 'idle' }))}>{t('player.close')}</button></div></div>}{!loading && !error && (resumeNotice || toast) && <div className="resume-toast">{toast || resumeNotice}</div>}{recording && <div className="record-badge"><span />REC {formatTime(recordSeconds)}</div>}</div></div>
+</div>}</header><input ref={subtitleInputRef} type="file" accept=".srt,.vtt,text/vtt" hidden onChange={(event) => { loadLocalSubtitle(event.target.files); event.target.value = '' }} /><div className="player-stage" style={{ '--cue-scale': cueStyle.scale, '--cue-bottom': `${cueStyle.bottom}%`, '--cue-bg': `rgba(0,0,0,${cueStyle.bg / 100})` } as React.CSSProperties}><div ref={containerRef} className="player-container" />{!loading && !error && <div className="player-side-tools"><button type="button" className="side-tool" onClick={() => void snapshot()} title={t('player.snapshotTitle')} aria-label={t('player.snapshotTitle')}><svg width="17" height="17" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 5.2c0-.66.54-1.2 1.2-1.2h1.9l1-1.5h4.8l1 1.5h1.9c.66 0 1.2.54 1.2 1.2v6.6a1.2 1.2 0 01-1.2 1.2H3.2A1.2 1.2 0 012 11.8z" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" /><circle cx="8" cy="8.4" r="2.3" fill="none" stroke="currentColor" strokeWidth="1.4" /></svg></button><button type="button" className={`side-tool ${recording ? 'is-recording' : ''}`} onClick={() => (recording ? stopRecording() : void startRecording())} title={recording ? t('player.recordStop') : t('player.recordStart')} aria-label={recording ? t('player.recordStop') : t('player.recordStart')}>{recording ? <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><rect x="3.5" y="3.5" width="9" height="9" rx="2" fill="currentColor" /></svg> : <svg width="17" height="17" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.1" fill="none" stroke="currentColor" strokeWidth="1.5" /><circle cx="8" cy="8" r="2.6" fill="currentColor" /></svg>}</button></div>}{loading && compat.phase !== 'running' && compat.phase !== 'preparing' && <div className="player-overlay"><div className="loading-spinner" /><span>{statusText}</span></div>}{(compat.phase === 'preparing' || compat.phase === 'running') && <div className="player-overlay"><div className="loading-spinner" /><span>{compat.phase === 'preparing' ? t('player.compatPreparing') : t('player.compatRunning', { percent: compat.percent })}</span><small className="compat-reason">{compat.message}</small><button className="secondary-action" onClick={cancelCompatPlayback}>{t('player.cancel')}</button></div>}{error && compat.phase !== 'running' && compat.phase !== 'preparing' && <div className="player-overlay player-error"><span>{error}</span><div className="player-error-actions"><button className="secondary-action" onClick={() => void startCompatPlayback()}>{t('player.compatButton')}</button><button className="secondary-action" onClick={onBack}>{t('player.backToLibrary')}</button></div></div>}{compat.phase === 'error' && <div className="player-overlay player-error"><span>{compat.message}</span><div className="player-error-actions"><button className="secondary-action" onClick={() => setCompat((prev) => ({ ...prev, phase: 'idle' }))}>{t('player.close')}</button></div></div>}{!loading && !error && (resumeNotice || toast) && <div className="resume-toast">{toast || resumeNotice}</div>}{recording && <div className="record-badge"><span />REC {formatTime(recordSeconds)}</div>}</div></div>
 }
 export default Player

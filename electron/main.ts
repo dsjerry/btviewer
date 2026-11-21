@@ -7,7 +7,6 @@ import { torrentEngine } from './torrent-engine'
 import { getProgress, setProgress } from './progress-store'
 import { getThumbnails, saveThumbnail } from './thumbnail-store'
 import { loadSettings, saveSettings } from './settings'
-import { addFeed, checkAllFeeds, checkFeed, downloadFeedItem, getFeeds, removeFeed, startPolling, updateFeed } from './rss'
 import { getFileType, isUnderRoot, resolveAria2Binary } from './torrent-engine'
 import { addLocalMediaEntries, listLocalMedia, removeLocalMedia } from './local-media'
 import { createMediaCollection, listMediaCollections, removeMediaCollection, renameMediaCollection, updateMediaCollectionMembership } from './media-collections'
@@ -109,7 +108,7 @@ function engineConfig(settings: AppSettings) {
   }
 }
 
-// 下载完成桌面通知 + 完成后的动作（完整版 RSS 依赖此联动；均可在设置关闭）
+// 下载完成桌面通知 + 完成后的动作（均可在设置关闭）
 function setupCompleteNotifications() {
   torrentEngine.onTorrentComplete((hash, name) => {
     const settings = loadSettings()
@@ -759,23 +758,6 @@ function setupIPC() {
     try { return { success: true, data: await torrentEngine.extractCover(infoHash, filePath) } } catch (error) { return { success: false, error: getErrorMessage(error) } }
   })
 
-  ipcMain.handle('feeds:get', () => ({ success: true, data: getFeeds() }))
-  ipcMain.handle('feeds:add', (_event, input: Parameters<typeof addFeed>[0]) => {
-    try { return { success: true, data: addFeed(input) } } catch (error) { return { success: false, error: getErrorMessage(error) } }
-  })
-  ipcMain.handle('feeds:update', (_event, id: string, patch: Record<string, unknown>) => {
-    try { return { success: true, data: updateFeed(id, patch) } } catch (error) { return { success: false, error: getErrorMessage(error) } }
-  })
-  ipcMain.handle('feeds:remove', (_event, id: string) => {
-    try { removeFeed(id); return { success: true } } catch (error) { return { success: false, error: getErrorMessage(error) } }
-  })
-  ipcMain.handle('feeds:check', async (_event, id: string) => {
-    try { return { success: true, data: id === 'all' ? await checkAllFeeds() : [await checkFeed(id)] } } catch (error) { return { success: false, error: getErrorMessage(error) } }
-  })
-  ipcMain.handle('feeds:download-item', async (_event, feedId: string, guid: string) => {
-    try { await downloadFeedItem(feedId, guid); return { success: true } } catch (error) { return { success: false, error: getErrorMessage(error) } }
-  })
-
   // 播放器截图/录制内容落盘：渲染层传 dataURL，弹系统保存对话框后写文件
   ipcMain.handle('media:save', async (_event, defaultName: string, dataUrl: string) => {
     if (!mainWindow || mainWindow.isDestroyed()) return { success: false, error: '窗口尚未准备好' }
@@ -1055,8 +1037,6 @@ app.whenReady().then(async () => {
   }
   await createWindow()
   createTray()
-  // RSS 订阅轮询（后台静默进行，结果进 feeds.json）
-  startPolling()
   // 首次启动时命令行里带的种子/磁力（含打包后的文件关联双击）
   deliverInputs(process.argv.slice(1))
 

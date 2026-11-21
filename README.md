@@ -20,7 +20,7 @@ BTViewer 是一款基于 Electron + React 的桌面下载与媒体播放应用�
 - 支持 HTTP(S) / FTP 直链、Metalink，以及通过 yt-dlp 处理的 HLS 和视频站点
 - 媒体库支持本地媒体导入、自定义合集、搜索、筛选与排序
 - 内置播放器支持续播、跨任务播放列表、字幕及兼容播放
-- RSS 订阅、批量任务控制、限速、Tracker 设置和下载完成动作
+- 批量任务控制、限速、Tracker 设置和下载完成动作
 - 简体中文 / English 界面，支持 Windows、Linux 和 macOS
 
 ## 快速开始

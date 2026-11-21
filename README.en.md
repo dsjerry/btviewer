@@ -20,7 +20,7 @@ BTViewer is an Electron + React desktop downloader and media player. It supports
 - HTTP(S) / FTP direct downloads, Metalink, and yt-dlp-powered HLS and video sites
 - Local media import, custom collections, search, filters and sorting in the media library
 - Built-in player with resume playback, cross-task playlists, subtitles and compatibility playback
-- RSS subscriptions, batch task controls, speed limits, tracker settings and post-download actions
+- Batch task controls, speed limits, tracker settings and post-download actions
 - Simplified Chinese / English UI; Windows, Linux and macOS support
 
 ## Quick start

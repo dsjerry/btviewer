@@ -19,9 +19,9 @@ describe('词条表', () => {
 
 describe('t', () => {
   it('默认中文，切换到英文后取英文文案', () => {
-    expect(t('nav.downloads')).toBe('下载任务')
+    expect(t('nav.settings')).toBe('设置')
     setLanguage('en')
-    expect(t('nav.downloads')).toBe('Downloads')
+    expect(t('nav.settings')).toBe('Settings')
     expect(getLanguage()).toBe('en')
   })
 

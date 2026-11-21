@@ -215,7 +215,7 @@ class TorrentEngine {
   private destroying = false
   private spawning: Promise<void> | null = null
   private refreshing = false
-  // 任务由“下载中”转为“已完成”时的回调（RSS 下载完成桌面通知用）
+  // 任务由“下载中”转为“已完成”时的回调（下载完成桌面通知用）
   private completeListener: ((infoHash: string, name: string) => void) | null = null
   // 全局状态广播：跨会话恢复的任务没有 per-task callback，靠它保证状态实时推送
   private globalListener: ((status: TorrentStatus) => void) | null = null
@@ -875,7 +875,7 @@ class TorrentEngine {
       if (!existing.files?.length) await this.waitForMetadata(hash)
       return this.toTorrentStatus(hash, this.statuses.get(hash) || existing)
     }
-    // dir：任务级保存目录（RSS 按季归类用），覆盖全局下载目录
+    // dir：任务级保存目录，覆盖全局下载目录
     // seedOptions：做种策略是下载选项，只能建任务时给定
     // bt-prioritize-piece：边下边播优化，head/tail 优先保证起播（MP4 的 moov 可能在尾部）
     const options = { ...this.seedOptions(), 'bt-tracker': resolveBtTrackers(id, isTorrentFile, this.trackerOverride), ...(this.streamPriority ? { 'bt-prioritize-piece': prioritizePieceOption() } : {}), ...(opts.dir ? { dir: opts.dir } : {}), ...(isTorrentFile ? { pause: 'true' } : { 'pause-metadata': 'true', 'bt-save-metadata': 'true' }) }

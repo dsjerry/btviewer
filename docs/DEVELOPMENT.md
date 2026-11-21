@@ -46,7 +46,7 @@ FFMPEG_PATH=/absolute/path/to/ffmpeg npm run dev
 ## 目录结构
 
 - `electron/`：主进程、下载引擎、IPC、媒体流与持久化
-- `src/components/`：首页、下载、媒体库、订阅、播放器和设置
+- `src/components/`：首页（影院化媒体库）、下载浮层（DownloadsPanel）、播放器和设置
 - `src/services/`：renderer 服务、播放列表与 IPC 类型
 - `tests/`：Vitest 单元测试
 - `resources/`：应用图标、aria2c 与媒体工具

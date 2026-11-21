@@ -13,9 +13,6 @@ export function getLanguage(): Language { return current }
 const MESSAGES: Record<string, [string, string]> = {
   // ── 外壳 ────────────────────────────────────────────────────
   'nav.home': ['首页', 'Home'],
-  'nav.downloads': ['下载任务', 'Downloads'],
-  'nav.files': ['媒体库', 'Library'],
-  'nav.feeds': ['订阅', 'Feeds'],
   'nav.settings': ['设置', 'Settings'],
   'shell.online': ['本地服务在线', 'Local service online'],
   'shell.limit': ['限速', 'Limit'],
@@ -56,6 +53,7 @@ const MESSAGES: Record<string, [string, string]> = {
   'home.dropTitle': ['松开以添加任务', 'Drop to add'],
   'home.dropHint': ['支持 .torrent/.metalink 文件与磁力、直链，可一次拖入多个', '.torrent/.metalink files, magnets and direct links — multiple at once'],
   'home.dropFilesOnly': ['请拖入 .torrent/.metalink 文件或下载链接', 'Drop a .torrent/.metalink file or a download link'],
+  'home.viewDetail': ['查看详情', 'Details'],
   'downloads.parsingHint': ['正在从节点获取种子信息（文件列表到手前不需要操作）', 'Fetching torrent info from peers — nothing to do until the file list arrives'],
   'downloads.parsingWait': ['正在获取种子信息，已等待 {seconds} 秒…', 'Fetching torrent info — {seconds}s so far…'],
   'downloads.parsingNoPeers': ['已等待 {seconds} 秒、0 个节点：可能是资源已无活跃节点，或你的网络限制了 BT 连接（常见于移动/部分宽带）。可在其它客户端验证该磁力', 'Waiting {seconds}s with 0 peers — the swarm may be dead, or your network blocks inbound BT connections. Verify this magnet in another client'],
@@ -188,8 +186,7 @@ const MESSAGES: Record<string, [string, string]> = {
   'library.type.other': ['其他', 'Other'],
 
   // ── 下载任务页 ───────────────────────────────────────────────
-  'downloads.eyebrow': ['下载队列', 'Download queue'],
-  'downloads.title': ['下载任务', 'Downloads'],
+  'downloads.panelTitle': ['下载面板', 'Downloads'],
   'downloads.summary': ['{active} 个进行中 · {completed} 个已完成', '{active} active · {completed} completed'],
   'downloads.emptyActive': ['没有进行中的任务', 'No active task'],
   'downloads.emptyCompleted': ['还没有完成的任务', 'Nothing completed yet'],
@@ -379,11 +376,8 @@ const MESSAGES: Record<string, [string, string]> = {
   'player.recordStop': ['停止录制并保存', 'Stop recording and save'],
   'player.loadSubtitleTitle': ['加载本地 srt / vtt 字幕', 'Load a local srt / vtt subtitle'],
   'player.snapshotTitle': ['截取当前画面并保存为图片', 'Capture the current frame as an image'],
-  'feeds.eyebrow': ['RSS 订阅', 'RSS feeds'],
-  'feeds.title': ['订阅', 'Feeds'],
-  'feeds.subtitle': ['订阅源里的新条目会按规则自动入队', 'New items in your feeds are queued automatically by rule'],
 
-  // ── 设置页按钮/选项与订阅页（C6c）──────────────────────────────
+  // ── 设置页按钮/选项（C6c）──────────────────────────────────────
   'settings.eyebrow': ['系统设置', 'Settings'],
   'settings.title': ['设置', 'Settings'],
   'settings.subtitle': ['配置立即保存，对新任务生效；已存在的任务不受影响', 'Changes are saved immediately and apply to new tasks; existing tasks are unaffected'],
@@ -421,24 +415,6 @@ const MESSAGES: Record<string, [string, string]> = {
   'settings.repo': ['仓库', 'Repository'],
   'settings.feedback': ['反馈', 'Feedback'],
   'settings.disclaimer': ['本应用仅提供 BitTorrent 下载与播放功能，请仅用于合法授权的内容；使用者需自行承担使用行为的法律责任。', 'This application only provides BitTorrent downloading and playback. Use it for legally licensed content only; you are responsible for your own use.'],
-  'feeds.manageEyebrow': ['订阅管理', 'Feed management'],
-  'feeds.addTitle': ['添加订阅', 'Add a feed'],
-  'feeds.addHint': ['关键词为空时下载全部条目；多个关键词需全部命中', 'With no keywords every item is downloaded; with several, all must match'],
-  'feeds.autoDownload': ['自动下载新条目', 'Auto-download new items'],
-  'feeds.groupBySeason': ['按季归类子目录', 'Group into season folders'],
-  'feeds.addAndFetch': ['添加并抓取', 'Add and fetch'],
-  'feeds.loading': ['正在读取订阅…', 'Loading feeds…'],
-  'feeds.empty': ['还没有订阅', 'No feed yet'],
-  'feeds.emptyHint': ['添加一个 RSS 源，新资源会自动进入下载任务。', 'Add an RSS source and new releases are queued automatically.'],
-  'feeds.disabled': ['已停用', 'Disabled'],
-  'feeds.autoBadge': ['自动下载', 'Auto'],
-  'feeds.seasonBadge': ['按季归类', 'By season'],
-  'feeds.enable': ['启用', 'Enabled'],
-  'feeds.autoShort': ['自动下载', 'Auto-download'],
-  'feeds.seasonShort': ['按季归类', 'By season'],
-  'feeds.delete': ['删除', 'Delete'],
-  'feeds.downloaded': ['已下载', 'Downloaded'],
-  'feeds.download': ['下载', 'Download'],
   'player.waitTimeout': ['等待数据超时，请确认任务仍在下载后重试', 'Timed out waiting for data — check that the task is still downloading, then retry'],
   'player.unsupportedContainer': ['{ext} 容器无法在内置播放器中解码，建议寻找 MP4 / H.264 版本', 'The {ext} container cannot be decoded by the built-in player — look for an MP4 / H.264 release'],
   'player.unsupportedCodec': ['数据已经下载到本地，但内置播放器无法解码当前容器或编码（常见于 MKV 内的 H.265 / AC3 / DTS）。点「兼容播放」可自动转封装或转码', 'The data is already on disk but the built-in player cannot decode this container or codec (common with HEVC/AC3/DTS inside MKV). Use “Compatible playback” to remux or transcode'],
@@ -519,19 +495,6 @@ const MESSAGES: Record<string, [string, string]> = {
   'settings.resetConfirm': ['将下载相关设置恢复为默认值（不影响下载目录、语言与主题）。继续？', 'Reset download-related settings to defaults (download folder, language and theme are kept). Continue?'],
   'settings.resetDone': ['已恢复默认值', 'Defaults restored'],
   'settings.ytdlpPathPlaceholder': ['留空自动查找（内置安装目录与系统 PATH）', 'Leave empty to auto-detect (bundled folder and system PATH)'],
-
-  // ── 订阅页提示（C6e）────────────────────────────────────────
-  'feeds.loadFailed': ['读取订阅失败', 'Could not load feeds'],
-  'feeds.refreshFailed': ['刷新失败', 'Refresh failed'],
-  'feeds.urlRequired': ['请填写 RSS 订阅地址', 'Enter an RSS feed URL'],
-  'feeds.addFailed': ['添加订阅失败', 'Could not add the feed'],
-  'feeds.saveFailed': ['保存失败', 'Could not save'],
-  'feeds.deleteFailed': ['删除失败', 'Could not delete'],
-  'feeds.downloadFailed': ['下载失败', 'Download failed'],
-  'feeds.neverChecked': ['尚未抓取', 'never fetched'],
-  'feeds.justChecked': ['刚刚抓取', 'just now'],
-  'feeds.fetching': ['抓取中…', 'Fetching…'],
-  'feeds.refreshNow': ['立即刷新', 'Refresh now'],
 
   // ── 外壳提示（C6f）──────────────────────────────────────────
   'app.limitFailed': ['设置限速失败', 'Could not set the speed limit'],

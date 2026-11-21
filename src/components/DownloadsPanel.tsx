@@ -5,8 +5,23 @@ import { statusLabel, typeLabel, taskType } from '../services/task-meta'
 import { t } from '../services/i18n'
 import { ConfirmDialog } from './ConfirmDialog'
 import { validateSizeLimit } from '../services/validate'
-import type { TaskPeer, TorrentStatus } from '../types'
-interface Props { torrents: TorrentStatus[]; onRefresh: () => void; onSelect: (torrent: TorrentStatus) => void; focusHash?: string | null; onFocusHandled?: () => void }
+import type { GlobalStat, TaskPeer, TorrentStatus } from '../types'
+
+interface Props {
+  torrents: TorrentStatus[]
+  onRefresh: () => void
+  onSelect: (torrent: TorrentStatus) => void
+  focusHash?: string | null
+  onFocusHandled?: () => void
+  // FAB/浮层开合由 App 持有：通知跳转、直链下载完成等外部入口要能主动打开浮层
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  globalStat: GlobalStat | null
+  activeCount: number
+  // 播放页全屏观影时不渲染 FAB 与浮层
+  visible?: boolean
+}
+
 function format(value: number, suffix = 'B') { if (!value) return `0 ${suffix}`; const units = suffix === 'B/s' ? ['B/s', 'KB/s', 'MB/s', 'GB/s'] : ['B', 'KB', 'MB', 'GB', 'TB']; const i = Math.min(Math.floor(Math.log(value) / Math.log(1024)), units.length - 1); return `${(value / 1024 ** i).toFixed(i ? 1 : 0)} ${units[i]}` }
 function time(value: number) { if (!value || !Number.isFinite(value)) return '计算中'; const seconds = Math.floor(value / 1000); return seconds < 60 ? `${seconds} 秒` : `${Math.floor(seconds / 60)} 分钟` }
 function shareRatio(torrent: TorrentStatus) { return torrent.downloaded > 0 ? (torrent.uploaded / torrent.downloaded).toFixed(2) : torrent.uploaded > 0 ? '∞' : '—' }
@@ -152,21 +167,30 @@ const DownloadCard = memo<CardProps>(({ torrent, busy, expanded, onSelect, onTog
   </article>
 ), (a, b) => a.busy === b.busy && a.expanded === b.expanded && a.onSelect === b.onSelect && a.onToggle === b.onToggle && a.onAction === b.onAction && a.onRemove === b.onRemove && sameTorrentStatus(a.torrent, b.torrent))
 
-const DownloadManager: React.FC<Props> = ({ torrents, onRefresh, onSelect, focusHash, onFocusHandled }) => {
+// 下载浮层：导航不再有下载页，右下角 FAB 常驻入口（徽标=进行中任务数），点开浮层做完整管理
+const DownloadsPanel: React.FC<Props> = ({ torrents, onRefresh, onSelect, focusHash, onFocusHandled, open, onOpenChange, globalStat, activeCount, visible = true }) => {
   const [busy, setBusy] = useState<string | null>(null)
   const [expanded, setExpanded] = useState<string | null>(null)
   // 视图切换：进行中（解析/连接/下载/暂停/出错）与已完成
   const [tab, setTab] = useState<'active' | 'completed'>('active')
-  // 点系统通知跳转过来：切到对应分组并展开该任务详情
+  // 点系统通知跳转过来：打开浮层、切到对应分组并展开该任务详情
   useEffect(() => {
     if (!focusHash) return
     const target = torrents.find((torrent) => torrent.infoHash === focusHash)
     if (target) {
+      onOpenChange(true)
       setTab(target.status === 'seeding' ? 'completed' : 'active')
       setExpanded(focusHash)
     }
     onFocusHandled?.()
-  }, [focusHash, torrents, onFocusHandled])
+  }, [focusHash, torrents, onFocusHandled, onOpenChange])
+  // Esc 关闭浮层（ConfirmDialog 打开时由其自身拦截，冒泡到这里时确认框已关）
+  useEffect(() => {
+    if (!open) return
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') onOpenChange(false) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [open, onOpenChange])
   const action = useCallback(async (hash: string, task: () => Promise<{ success: boolean; error?: string }>) => {
     setBusy(hash)
     try { const result = await task(); if (!result.success) window.alert(result.error || t('downloads.actionFailed')); else onRefresh() } catch (error) { window.alert(error instanceof Error ? error.message : t('downloads.actionFailed')) } finally { setBusy(null) }
@@ -213,7 +237,40 @@ const DownloadManager: React.FC<Props> = ({ torrents, onRefresh, onSelect, focus
   }, [onRefresh])
   const active = torrents.filter((torrent) => torrent.status !== 'seeding')
   const completed = torrents.filter((torrent) => torrent.status === 'seeding')
-  const visible = tab === 'active' ? active : completed
-  return <div className="page-content"><div className="page-heading"><div><span className="eyebrow">{t('downloads.eyebrow')}</span><h2>{t('downloads.title')}</h2><p>{torrents.length ? t('downloads.summary', { active: active.length, completed: completed.length }) : t('downloads.emptyActiveHint')}</p></div><div className="heading-side"><span className="heading-count">{torrents.length.toString().padStart(2, '0')}</span><div className="heading-actions"><button className="small-button" disabled={batchBusy || !active.length} onClick={() => void batch(() => ipc.pauseAll())}>Ⅱ {t('downloads.pauseAll')}</button><button className="small-button" disabled={batchBusy} onClick={() => void batch(() => ipc.resumeAll())}>▶ {t('downloads.resumeAll')}</button><button className="small-button" disabled={batchBusy} onClick={() => void importList()}>⤓ {t('downloads.import')}</button><button className="small-button" disabled={batchBusy} onClick={() => void exportList()}>⤒ {t('downloads.export')}</button></div></div></div><div className="task-tabs" role="tablist"><button role="tab" aria-selected={tab === 'active'} className={tab === 'active' ? 'is-active' : ''} onClick={() => setTab('active')}>{t('downloads.tabActive')} <b>{active.length}</b></button><button role="tab" aria-selected={tab === 'completed'} className={tab === 'completed' ? 'is-active' : ''} onClick={() => setTab('completed')}>{t('downloads.tabCompleted')} <b>{completed.length}</b></button></div>{!visible.length ? <div className="empty-state"><span>↓</span><strong>{tab === 'active' ? t('downloads.emptyActive') : t('downloads.emptyCompleted')}</strong><p>{tab === 'active' ? t('downloads.emptyActiveHint') : t('downloads.emptyCompletedHint')}</p></div> : <div className="download-stack">{visible.map((torrent) => <DownloadCard key={torrent.infoHash} torrent={torrent} busy={isBusy(torrent)} expanded={isExpanded(torrent)} onSelect={onSelect} onToggle={toggle} onAction={onAction} onRemove={remove} />)}<ConfirmDialog open={!!pendingRemove} message={pendingRemove ? t('downloads.removeConfirm', { name: pendingRemove.name }) : ''} checkboxLabel={t('confirm.removeWithFiles')} onConfirm={confirmRemove} onCancel={() => setPendingRemove(null)} /></div>}</div>
+  const tabItems = tab === 'active' ? active : completed
+  const fabSpeed = globalStat && globalStat.downloadSpeed > 0 ? format(globalStat.downloadSpeed, 'B/s') : ''
+  // 播放页全屏观影：FAB 与浮层都不出现（进入播放器前浮层已由 startPlay 收起）
+  if (!visible) return null
+  return <>
+    <button className={`downloads-fab ${open ? 'is-open' : ''} ${activeCount > 0 ? 'is-active' : ''}`} onClick={() => onOpenChange(!open)} title={t('downloads.panelTitle')} aria-expanded={open} aria-label={t('downloads.panelTitle')}>
+      <span className="fab-icon" aria-hidden="true">
+        {open ? <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8h9M8.5 4l4 4-4 4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg> : <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5v7m0 0L4.5 6M8 9.5L11.5 6M2.5 12.5h11" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>}
+      </span>
+      {fabSpeed && <span className="fab-speed">{fabSpeed}</span>}
+      {activeCount > 0 && <b className="fab-count">{activeCount > 99 ? '99+' : activeCount}</b>}
+    </button>
+    {open && (
+      <div className="downloads-panel" role="dialog" aria-label={t('downloads.panelTitle')}>
+        <div className="downloads-panel-head">
+          <strong>{t('downloads.panelTitle')}</strong>
+          <div className="task-tabs" role="tablist">
+            <button role="tab" aria-selected={tab === 'active'} className={tab === 'active' ? 'is-active' : ''} onClick={() => setTab('active')}>{t('downloads.tabActive')} <b>{active.length}</b></button>
+            <button role="tab" aria-selected={tab === 'completed'} className={tab === 'completed' ? 'is-active' : ''} onClick={() => setTab('completed')}>{t('downloads.tabCompleted')} <b>{completed.length}</b></button>
+          </div>
+          <button className="panel-close" onClick={() => onOpenChange(false)} aria-label={t('shell.dismiss')}>×</button>
+        </div>
+        <div className="downloads-panel-actions">
+          <span className="panel-summary">{torrents.length ? t('downloads.summary', { active: active.length, completed: completed.length }) : t('downloads.emptyActiveHint')}</span>
+          <button className="small-button" disabled={batchBusy || !active.length} onClick={() => void batch(() => ipc.pauseAll())}>Ⅱ {t('downloads.pauseAll')}</button>
+          <button className="small-button" disabled={batchBusy} onClick={() => void batch(() => ipc.resumeAll())}>▶ {t('downloads.resumeAll')}</button>
+          <button className="small-button" disabled={batchBusy} onClick={() => void importList()}>⤓ {t('downloads.import')}</button>
+          <button className="small-button" disabled={batchBusy} onClick={() => void exportList()}>⤒ {t('downloads.export')}</button>
+        </div>
+        <div className="downloads-panel-body">
+          {!tabItems.length ? <div className="empty-state"><span>↓</span><strong>{tab === 'active' ? t('downloads.emptyActive') : t('downloads.emptyCompleted')}</strong><p>{tab === 'active' ? t('downloads.emptyActiveHint') : t('downloads.emptyCompletedHint')}</p></div> : <div className="download-stack">{tabItems.map((torrent) => <DownloadCard key={torrent.infoHash} torrent={torrent} busy={isBusy(torrent)} expanded={isExpanded(torrent)} onSelect={onSelect} onToggle={toggle} onAction={onAction} onRemove={remove} />)}<ConfirmDialog open={!!pendingRemove} message={pendingRemove ? t('downloads.removeConfirm', { name: pendingRemove.name }) : ''} checkboxLabel={t('confirm.removeWithFiles')} onConfirm={confirmRemove} onCancel={() => setPendingRemove(null)} /></div>}
+        </div>
+      </div>
+    )}
+  </>
 }
-export default DownloadManager
+export default DownloadsPanel

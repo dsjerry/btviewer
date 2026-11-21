@@ -1,4 +1,4 @@
-import type { AppSettings, BatchAddSummary, CompatPlanResult, CompatProgressEvent, CompatStartResult, EngineNetworkStatus, Feed, GlobalStat, IPCResult, LocalMediaEntry, MediaCollection, MediaCollectionItem, TaskImportSummary, TaskPeer, TorrentFileInfo, TorrentStatus, WatchProgress } from '../types'
+import type { AppSettings, BatchAddSummary, CompatPlanResult, CompatProgressEvent, CompatStartResult, EngineNetworkStatus, GlobalStat, IPCResult, LocalMediaEntry, MediaCollection, MediaCollectionItem, TaskImportSummary, TaskPeer, TorrentFileInfo, TorrentStatus, WatchProgress } from '../types'
 
 // capabilities：该平台能否一键安装，决定设置页显示「安装」按钮还是面向普通用户的说明
 export interface InstallCapabilities { ytdlp: boolean; ffmpeg: boolean; deno: boolean }
@@ -53,12 +53,6 @@ export interface ElectronAPI {
   getThumbnails: (keys: string[]) => Promise<IPCResult<Array<string | null>>>
   saveThumbnail: (key: string, dataUrl: string) => Promise<IPCResult>
   getEmbeddedCover: (infoHash: string, filePath: string) => Promise<IPCResult<string | null>>
-  feedsGet: () => Promise<IPCResult<Feed[]>>
-  feedsAdd: (input: { name?: string; url?: string; keywords?: string[]; autoDownload?: boolean; groupBySeason?: boolean }) => Promise<IPCResult<Feed>>
-  feedsUpdate: (id: string, patch: Partial<Pick<Feed, 'name' | 'url' | 'keywords' | 'autoDownload' | 'groupBySeason' | 'enabled'>>) => Promise<IPCResult<Feed>>
-  feedsRemove: (id: string) => Promise<IPCResult>
-  feedsCheck: (id: string) => Promise<IPCResult<Feed[]>>
-  feedsDownloadItem: (feedId: string, guid: string) => Promise<IPCResult>
   saveMediaFile: (defaultName: string, dataUrl: string) => Promise<IPCResult<string>>
   recordBegin: (defaultName: string) => Promise<IPCResult<{ id: string; path: string }>>
   recordAppend: (id: string, chunk: Uint8Array) => Promise<IPCResult>
@@ -164,12 +158,6 @@ export const ipc: ElectronAPI = {
   getThumbnails: (keys) => getElectronAPI().getThumbnails(keys),
   saveThumbnail: (key, dataUrl) => getElectronAPI().saveThumbnail(key, dataUrl),
   getEmbeddedCover: (infoHash, filePath) => getElectronAPI().getEmbeddedCover(infoHash, filePath),
-  feedsGet: () => getElectronAPI().feedsGet(),
-  feedsAdd: (input) => getElectronAPI().feedsAdd(input),
-  feedsUpdate: (id, patch) => getElectronAPI().feedsUpdate(id, patch),
-  feedsRemove: (id) => getElectronAPI().feedsRemove(id),
-  feedsCheck: (id) => getElectronAPI().feedsCheck(id),
-  feedsDownloadItem: (feedId, guid) => getElectronAPI().feedsDownloadItem(feedId, guid),
   saveMediaFile: (defaultName, dataUrl) => getElectronAPI().saveMediaFile(defaultName, dataUrl),
   recordBegin: (defaultName) => getElectronAPI().recordBegin(defaultName),
   recordAppend: (id, chunk) => getElectronAPI().recordAppend(id, chunk),

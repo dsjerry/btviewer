@@ -46,7 +46,7 @@ FFMPEG_PATH=/absolute/path/to/ffmpeg npm run dev
 ## Project layout
 
 - `electron/`: main process, download engine, IPC, media streaming and persistence
-- `src/components/`: Home, Downloads, Library, Feeds, Player and Settings
+- `src/components/`: Home (cinema-style library), Downloads overlay (DownloadsPanel), Player and Settings
 - `src/services/`: renderer services, playlists and IPC types
 - `tests/`: Vitest unit tests
 - `resources/`: app icons, aria2c and media tools
