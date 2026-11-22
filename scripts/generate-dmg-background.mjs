@@ -21,12 +21,12 @@ const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" 
       <stop offset="0.55" stop-color="#15180e"/>
       <stop offset="1" stop-color="#0b0d07"/>
     </linearGradient>
-    <radialGradient id="glowLeft" cx="0.31" cy="0.63" r="0.42">
+    <radialGradient id="glowLeft" cx="0.26" cy="0.65" r="0.4">
       <stop offset="0" stop-color="rgba(216,243,106,0.14)"/>
       <stop offset="0.55" stop-color="rgba(216,243,106,0.05)"/>
       <stop offset="1" stop-color="rgba(216,243,106,0)"/>
     </radialGradient>
-    <radialGradient id="glowRight" cx="0.71" cy="0.63" r="0.42">
+    <radialGradient id="glowRight" cx="0.68" cy="0.65" r="0.4">
       <stop offset="0" stop-color="rgba(169,233,108,0.10)"/>
       <stop offset="0.6" stop-color="rgba(169,233,108,0.04)"/>
       <stop offset="1" stop-color="rgba(169,233,108,0)"/>
@@ -49,7 +49,7 @@ const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" 
   <text x="${W / 2}" y="96" text-anchor="middle" font-family="Space Grotesk" font-weight="700" font-size="30" letter-spacing="0.5" fill="#f3f0e8">BT<tspan fill="#d8f36a">Viewer</tspan></text>
   <text x="${W / 2}" y="124" text-anchor="middle" font-family="DM Mono" font-size="11" letter-spacing="2" fill="#8f9086">MAGNET · TORRENT · STREAMING</text>
   <!-- 拖放指引：应用（左） → Applications（右） -->
-  <path d="M ${W / 2 - 46} 246 L ${W / 2 - 14} 246 M ${W / 2 - 22} 239 L ${W / 2 - 14} 246 L ${W / 2 - 22} 253" fill="none" stroke="url(#arrow)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M ${W / 2 - 46} 252 L ${W / 2 - 14} 252 M ${W / 2 - 22} 245 L ${W / 2 - 14} 252 L ${W / 2 - 22} 259" fill="none" stroke="url(#arrow)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
   <text x="${W / 2}" y="330" text-anchor="middle" font-family="PingFang SC" font-size="13" fill="#d4d5c7">把 BTViewer 拖到右侧「Applications」完成安装</text>
   <text x="${W / 2}" y="352" text-anchor="middle" font-family="DM Mono" font-size="9.5" letter-spacing="1" fill="#6e7065">FIRST OPEN: RIGHT-CLICK → OPEN</text>
 </svg>`

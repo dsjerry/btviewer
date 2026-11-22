@@ -58,15 +58,14 @@ nsis:
   createStartMenuShortcut: true
   shortcutName: BTViewer
 # DMG 安装窗口（顶层键，不属于 mac 段）：深色品牌背景
-# （scripts/generate-dmg-background.mjs 生成，Retina @2x 同目录自动取用）
+# （scripts/generate-dmg-background.mjs 生成，Retina @2x 同目录自动取用）。
+# 不自定义 contents：默认落点即 660×400 窗口的标准布局（应用 130,220 / Applications 410,220），
+# 自定义 contents 的 file path 在打包后解析不到 .app（CI 已踩坑），背景辉光对准默认落点即可
 dmg:
   background: resources/dmg/background.png
   window:
     width: 660
     height: 400
-  contents:
-    - { x: 210, y: 250, type: file, path: BTViewer.app }
-    - { x: 465, y: 250, type: link, path: /Applications }
 
 mac:
   target:
