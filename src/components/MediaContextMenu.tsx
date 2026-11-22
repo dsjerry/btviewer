@@ -15,9 +15,6 @@ export interface MediaMenuData {
   onAdd: (collectionId: string) => void
   onRemoveFromCollection: () => void
   onRemove: () => void
-  // 评分：点击星级即时生效且不关菜单（再点当前星级 = 清除）
-  rating: number
-  onRate: (stars: number) => void
 }
 
 interface Props {
@@ -61,18 +58,6 @@ export const MediaContextMenu: React.FC<Props> = ({ menu, onClose }) => {
   return (
     <div ref={ref} className="media-context-menu" role="menu" style={{ left: menu.x + shift.x, top: menu.y + shift.y }}>
       <div className="media-context-title" title={menu.title}>{menu.title}</div>
-      <div className="media-context-rating">
-        <span className="media-context-label">{t('library.ratingTitle')}</span>
-        <div className="rating-stars">
-          {[1, 2, 3, 4, 5].map((star) => (
-            <button key={star} type="button" className={`rating-star ${menu.rating >= star ? 'is-active' : ''}`}
-              title={menu.rating === star ? t('library.ratingClear') : `${star} ★`}
-              aria-label={`${star} ★`}
-              onClick={() => menu.onRate(menu.rating === star ? 0 : star)}>★</button>
-          ))}
-        </div>
-      </div>
-      <div className="media-context-divider" />
       {menu.play && <button type="button" role="menuitem" onClick={run(onClose, menu.play)}>▶ {t('library.play')}</button>}
       {menu.openDetail && <button type="button" role="menuitem" onClick={run(onClose, menu.openDetail)}>▤ {t('library.openDetail')}</button>}
       {(menu.play || menu.openDetail) && <div className="media-context-divider" />}

@@ -310,9 +310,7 @@ const FileList: React.FC<FileListProps> = ({ torrent, torrents, onSelectTorrent,
       inCollection: !!activeCollection && hasMediaCollectionItem(activeCollection, item),
       onAdd: (collectionId) => { void updateCollectionItems(collectionId, [item], 'add').then((ok) => { if (ok) setCollectionNotice(t('library.itemsAdded', { count: 1 })) }) },
       onRemoveFromCollection: () => { if (activeCollection) void updateCollectionItems(activeCollection.id, [item], 'remove').then((ok) => { if (ok) setCollectionNotice(t('library.itemsRemoved', { count: 1, name: activeCollection.name })) }) },
-      onRemove: actions.remove,
-      rating: ratingOf(item),
-      onRate: (stars) => { void rateItem(item, stars) }
+      onRemove: actions.remove
     })
   }
   const handleMediaDragStart = (event: React.DragEvent<HTMLDivElement>, item: MediaCollectionItem) => {
@@ -797,12 +795,25 @@ const FileList: React.FC<FileListProps> = ({ torrent, torrents, onSelectTorrent,
   // 详情页来源：BT 展示磁力链接，直链/视频站点展示原始 URL（均支持复制，URL 可直接在浏览器打开）
   const isBt = taskType(torrent) === 'bt'
   const source = isBt ? torrent.magnetURI : torrent.sourceUrl || ''
+  // 详情页评分：星级挂在页头右侧（状态胶囊下方），点击即时生效，再点当前星级清除
+  const detailStars = ratingOf({ type: 'task', id: torrent.infoHash })
   return (
     <div className="page-content">
       <button className="back-link" onClick={onBack}>{t('library.back')}</button>
       <div className="page-heading">
         <div><span className="eyebrow">{t('library.eyebrow')} / {torrent.infoHash.slice(0, 8)}</span><h2 title={torrent.name}>{torrent.name}</h2><p>{t('library.fileCount', { count: torrent.files.length })} · {formatSize(torrent.totalSize)}</p></div>
-        <span className={`status-pill ${torrent.status}`}>{statusLabel(torrent.status)} {percentOf(torrent)}%</span>
+        <div className="detail-heading-side">
+          <span className={`status-pill ${torrent.status}`}>{statusLabel(torrent.status)} {percentOf(torrent)}%</span>
+          <div className="detail-rating" role="group" aria-label={t('library.ratingTitle')}>
+            {[1, 2, 3, 4, 5].map((star) => (
+              <button key={star} type="button" className={`detail-rating-star ${detailStars >= star ? 'is-active' : ''}`}
+                title={detailStars === star ? t('library.ratingClear') : `${star} ★`}
+                aria-label={`${star} ★`}
+                onClick={() => { void rateItem({ type: 'task', id: torrent.infoHash }, detailStars === star ? 0 : star) }}>★</button>
+            ))}
+            <span className="detail-rating-value">{detailStars > 0 ? t('library.ratingBadge', { stars: detailStars }) : ''}</span>
+          </div>
+        </div>
       </div>
       <div className="thin-progress"><span style={{ width: `${torrent.progress * 100}%` }} /></div>
       <div className="detail-path source-path">
