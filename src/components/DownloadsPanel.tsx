@@ -5,7 +5,7 @@ import { statusLabel, typeLabel, taskType } from '../services/task-meta'
 import { t } from '../services/i18n'
 import { ConfirmDialog } from './ConfirmDialog'
 import { validateSizeLimit } from '../services/validate'
-import type { GlobalStat, TaskPeer, TorrentStatus } from '../types'
+import type { GlobalStat, TaskHistoryEntry, TaskPeer, TorrentStatus } from '../types'
 
 interface Props {
   torrents: TorrentStatus[]
@@ -171,8 +171,16 @@ const DownloadCard = memo<CardProps>(({ torrent, busy, expanded, onSelect, onTog
 const DownloadsPanel: React.FC<Props> = ({ torrents, onRefresh, onSelect, focusHash, onFocusHandled, open, onOpenChange, globalStat, activeCount, visible = true }) => {
   const [busy, setBusy] = useState<string | null>(null)
   const [expanded, setExpanded] = useState<string | null>(null)
-  // 视图切换：进行中（解析/连接/下载/暂停/出错）与已完成
-  const [tab, setTab] = useState<'active' | 'completed'>('active')
+  // 视图切换：进行中（解析/连接/下载/暂停/出错）、已完成与历史留档
+  const [tab, setTab] = useState<'active' | 'completed' | 'history'>('active')
+  // 任务历史：面板打开时拉取（完成/移除留档在主进程写入）
+  const [history, setHistory] = useState<TaskHistoryEntry[]>([])
+  const [pendingClear, setPendingClear] = useState(false)
+  const refreshHistory = useCallback(async () => {
+    const result = await ipc.taskHistoryList().catch(() => null)
+    if (result?.success && result.data) setHistory(result.data)
+  }, [])
+  useEffect(() => { if (open) void refreshHistory() }, [open, refreshHistory])
   // 点系统通知跳转过来：打开浮层、切到对应分组并展开该任务详情
   useEffect(() => {
     if (!focusHash) return
@@ -200,9 +208,14 @@ const DownloadsPanel: React.FC<Props> = ({ torrents, onRefresh, onSelect, focusH
   const [pendingRemove, setPendingRemove] = useState<TorrentStatus | null>(null)
   const remove = useCallback((torrent: TorrentStatus) => setPendingRemove(torrent), [])
   const confirmRemove = useCallback((destroy: boolean) => {
-    if (pendingRemove) void action(pendingRemove.infoHash, () => ipc.removeTorrent(pendingRemove.infoHash, destroy))
+    if (pendingRemove) void action(pendingRemove.infoHash, () => ipc.removeTorrent(pendingRemove.infoHash, destroy)).then(() => refreshHistory())
     setPendingRemove(null)
-  }, [pendingRemove, action])
+  }, [pendingRemove, action, refreshHistory])
+  // 清空历史留档（不影响已下载文件）
+  const clearHistory = useCallback(() => {
+    void ipc.taskHistoryClear().then((result) => { if (result.success && result.data) setHistory(result.data) })
+    setPendingClear(false)
+  }, [])
   const toggle = useCallback((infoHash: string) => setExpanded((current) => current === infoHash ? null : infoHash), [])
   const isBusy = useCallback((torrent: TorrentStatus) => busy === torrent.infoHash, [busy])
   const isExpanded = useCallback((torrent: TorrentStatus) => expanded === torrent.infoHash, [expanded])
@@ -256,18 +269,36 @@ const DownloadsPanel: React.FC<Props> = ({ torrents, onRefresh, onSelect, focusH
           <div className="task-tabs" role="tablist">
             <button role="tab" aria-selected={tab === 'active'} className={tab === 'active' ? 'is-active' : ''} onClick={() => setTab('active')}>{t('downloads.tabActive')} <b>{active.length}</b></button>
             <button role="tab" aria-selected={tab === 'completed'} className={tab === 'completed' ? 'is-active' : ''} onClick={() => setTab('completed')}>{t('downloads.tabCompleted')} <b>{completed.length}</b></button>
+            <button role="tab" aria-selected={tab === 'history'} className={tab === 'history' ? 'is-active' : ''} onClick={() => { setTab('history'); void refreshHistory() }}>{t('downloads.tabHistory')} <b>{history.length}</b></button>
           </div>
           <button className="panel-close" onClick={() => onOpenChange(false)} aria-label={t('shell.dismiss')}>×</button>
         </div>
         <div className="downloads-panel-actions">
           <span className="panel-summary">{torrents.length ? t('downloads.summary', { active: active.length, completed: completed.length }) : t('downloads.emptyActiveHint')}</span>
+          {tab === 'history' && <button className="small-button" disabled={!history.length} onClick={() => setPendingClear(true)}>⌫ {t('downloads.clearHistory')}</button>}
           <button className="small-button" disabled={batchBusy || !active.length} onClick={() => void batch(() => ipc.pauseAll())}>Ⅱ {t('downloads.pauseAll')}</button>
           <button className="small-button" disabled={batchBusy} onClick={() => void batch(() => ipc.resumeAll())}>▶ {t('downloads.resumeAll')}</button>
           <button className="small-button" disabled={batchBusy} onClick={() => void importList()}>⤓ {t('downloads.import')}</button>
           <button className="small-button" disabled={batchBusy} onClick={() => void exportList()}>⤒ {t('downloads.export')}</button>
         </div>
         <div className="downloads-panel-body">
-          {!tabItems.length ? <div className="empty-state"><span>↓</span><strong>{tab === 'active' ? t('downloads.emptyActive') : t('downloads.emptyCompleted')}</strong><p>{tab === 'active' ? t('downloads.emptyActiveHint') : t('downloads.emptyCompletedHint')}</p></div> : <div className="download-stack">{tabItems.map((torrent) => <DownloadCard key={torrent.infoHash} torrent={torrent} busy={isBusy(torrent)} expanded={isExpanded(torrent)} onSelect={onSelect} onToggle={toggle} onAction={onAction} onRemove={remove} />)}<ConfirmDialog open={!!pendingRemove} message={pendingRemove ? t('downloads.removeConfirm', { name: pendingRemove.name }) : ''} checkboxLabel={t('confirm.removeWithFiles')} onConfirm={confirmRemove} onCancel={() => setPendingRemove(null)} /></div>}
+          {tab === 'history' ? (!history.length ? <div className="empty-state"><span>⏱</span><strong>{t('downloads.emptyHistory')}</strong><p>{t('downloads.emptyHistoryHint')}</p></div> : <div className="history-stack">
+            {history.map((entry) => (
+              <div className="history-item" key={entry.id}>
+                <div className="history-main">
+                  <span className="task-type">{typeLabel(entry.type)}</span>
+                  <h3 title={entry.name}>{entry.name}</h3>
+                  <span className="history-when">{entry.removedAt ? t('downloads.historyRemoved', { time: new Date(entry.removedAt).toLocaleString() }) : t('downloads.historyDone', { time: new Date(entry.completedAt ?? entry.addedAt ?? 0).toLocaleString() })}{entry.destroy ? t('downloads.historyRemovedFiles') : ''}</span>
+                </div>
+                <div className="history-meta">
+                  <span>{format(entry.totalSize ?? 0)}</span>
+                  <span className="history-path" title={entry.saveDir}>{entry.saveDir || t('downloads.unknown')}</span>
+                  <button className="small-button" disabled={!entry.saveDir} onClick={() => { if (entry.saveDir) void ipc.openPath(entry.saveDir) }}>{t('downloads.openDir')}</button>
+                </div>
+              </div>
+            ))}
+            <ConfirmDialog open={!!pendingClear} message={t('downloads.clearHistoryConfirm')} confirmText={t('downloads.confirmClear')} onConfirm={clearHistory} onCancel={() => setPendingClear(false)} />
+          </div>) : (!tabItems.length ? <div className="empty-state"><span>↓</span><strong>{tab === 'active' ? t('downloads.emptyActive') : t('downloads.emptyCompleted')}</strong><p>{tab === 'active' ? t('downloads.emptyActiveHint') : t('downloads.emptyCompletedHint')}</p></div> : <div className="download-stack">{tabItems.map((torrent) => <DownloadCard key={torrent.infoHash} torrent={torrent} busy={isBusy(torrent)} expanded={isExpanded(torrent)} onSelect={onSelect} onToggle={toggle} onAction={onAction} onRemove={remove} />)}<ConfirmDialog open={!!pendingRemove} message={pendingRemove ? t('downloads.removeConfirm', { name: pendingRemove.name }) : ''} checkboxLabel={t('confirm.removeWithFiles')} onConfirm={confirmRemove} onCancel={() => setPendingRemove(null)} /></div>)}
         </div>
       </div>
     )}

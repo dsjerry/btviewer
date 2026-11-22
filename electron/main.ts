@@ -11,6 +11,8 @@ import { getFileType, isUnderRoot, resolveAria2Binary } from './torrent-engine'
 import { addLocalMediaEntries, listLocalMedia, removeLocalMedia } from './local-media'
 import { createMediaCollection, listMediaCollections, removeMediaCollection, renameMediaCollection, updateMediaCollectionMembership } from './media-collections'
 import { collectLaunchInputs, collectMediaLaunchInputs } from './launch-inputs'
+import { clearTaskHistory, listTaskHistory, recordTaskHistory, type TaskHistoryDraft } from './task-history'
+import { listRatings, setRating } from './ratings'
 import { planPostAction } from './post-action'
 import { createClipboardWatcher } from './clipboard-watch'
 import { formatSpeed } from '../src/services/task-meta'
@@ -108,9 +110,32 @@ function engineConfig(settings: AppSettings) {
   }
 }
 
+// 任务历史：从引擎实时状态里抽一条留档（完成 / 移除采集点共用）
+function taskHistorySnapshot(infoHash: string): TaskHistoryDraft | null {
+  const status = torrentEngine.getAllStatuses().find((item) => item.infoHash.toLowerCase() === infoHash.toLowerCase())
+  if (!status) return null
+  return {
+    id: status.infoHash.toLowerCase(),
+    name: status.name,
+    type: status.type ?? 'bt',
+    source: status.type === 'bt' ? status.magnetURI : status.sourceUrl || '',
+    saveDir: status.saveDir,
+    totalSize: status.totalSize,
+    downloaded: status.downloaded,
+    uploaded: status.uploaded,
+    fileCount: status.files.length,
+    addedAt: status.addedAt
+  }
+}
+
 // 下载完成桌面通知 + 完成后的动作（均可在设置关闭）
 function setupCompleteNotifications() {
   torrentEngine.onTorrentComplete((hash, name) => {
+    // 完成即写入历史留档（含运行期字段，任务移除后仍可查）
+    try {
+      const draft = taskHistorySnapshot(hash)
+      if (draft) recordTaskHistory({ ...draft, name, completedAt: Date.now() })
+    } catch { /* 历史留档失败不影响通知与后处理 */ }
     const settings = loadSettings()
     if (settings.notifyOnComplete !== false && Notification.isSupported()) {
       const notification = new Notification({ title: 'BTViewer 下载完成', body: name })
@@ -414,8 +439,14 @@ function setupIPC() {
   })
 
   ipcMain.handle('torrent:remove', async (_event, infoHash: string, destroy = false) => {
+    // 移除前先抽快照（引擎删除时会清掉状态），移除成功后写入历史留档
+    const snapshot = taskHistorySnapshot(String(infoHash ?? ''))
     try {
-      await torrentEngine.removeTorrent(infoHash, destroy)
+      await torrentEngine.removeTorrent(String(infoHash ?? ''), Boolean(destroy))
+      if (snapshot) {
+        try { recordTaskHistory({ ...snapshot, removedAt: Date.now(), destroy: Boolean(destroy) }) }
+        catch { /* 历史留档失败不影响移除 */ }
+      }
       return { success: true }
     } catch (error) {
       return { success: false, error: getErrorMessage(error) }
@@ -897,6 +928,20 @@ function setupIPC() {
     } catch (error) {
       return { success: false, error: getErrorMessage(error) }
     }
+  })
+
+  // 任务历史：完成任务 / 被移除任务的留档查询与清空
+  ipcMain.handle('task-history:list', () => ({ success: true, data: listTaskHistory() }))
+  ipcMain.handle('task-history:clear', () => {
+    try { return { success: true, data: clearTaskHistory() } }
+    catch (error) { return { success: false, error: getErrorMessage(error) } }
+  })
+
+  // 媒体评分：键为 task:${hash} / local:${path}，星级 1-5（0 = 清除）
+  ipcMain.handle('ratings:get', () => ({ success: true, data: listRatings() }))
+  ipcMain.handle('ratings:set', (_event, key: string, stars: number) => {
+    try { return { success: true, data: setRating(String(key ?? ''), Number(stars ?? 0)) } }
+    catch (error) { return { success: false, error: getErrorMessage(error) } }
   })
 
   // 本地媒体流地址：登记进流服务注册表，返回带 token 的 /local/<id> 地址（与 /stream 同一套鉴权与 Range）

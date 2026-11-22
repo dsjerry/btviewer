@@ -32,11 +32,12 @@ interface FileListProps {
   // 嵌入首页时隐藏「媒体库」页头（首页工具栏已带标题），详情模式仍显示自己的页头
   hideHeading?: boolean
 }
-type SortKey = 'added' | 'name' | 'size' | 'watched'
-type FilterKey = 'all' | 'video' | 'audio' | 'unfinished'
+type SortKey = 'added' | 'name' | 'size' | 'watched' | 'rating'
+type FilterKey = 'all' | 'video' | 'audio' | 'unfinished' | 'topRated'
 const SORT_OPTIONS: Array<{ value: SortKey; labelKey: string }> = [
   { value: 'added', labelKey: 'library.sortAdded' },
   { value: 'watched', labelKey: 'library.sortWatched' },
+  { value: 'rating', labelKey: 'library.sortRating' },
   { value: 'name', labelKey: 'library.sortName' },
   { value: 'size', labelKey: 'library.sortSize' }
 ]
@@ -44,7 +45,8 @@ const FILTER_OPTIONS: Array<{ value: FilterKey; labelKey: string }> = [
   { value: 'all', labelKey: 'library.filterAll' },
   { value: 'video', labelKey: 'library.filterVideo' },
   { value: 'audio', labelKey: 'library.filterAudio' },
-  { value: 'unfinished', labelKey: 'library.filterUnfinished' }
+  { value: 'unfinished', labelKey: 'library.filterUnfinished' },
+  { value: 'topRated', labelKey: 'library.filterTopRated' }
 ]
 // 文件类型文案：模块级常量会在导入时就冻结语言，所以做成函数按当前语言取值
 const fileTypeLabel = (type: TorrentFileInfo['type']) => t(`library.type.${type}`)
@@ -120,6 +122,12 @@ const FileList: React.FC<FileListProps> = ({ torrent, torrents, onSelectTorrent,
   const selectedItems = useMemo(() => allMediaItems.filter((item) => selectedKeys.has(mediaCollectionItemKey(item))), [allMediaItems, selectedKeys])
   const collectionItemCount = (collection: MediaCollection) => collection.items.filter((item) => allMediaItems.some((entry) => mediaCollectionItemKey(entry) === mediaCollectionItemKey(item))).length
   const isInAnyCollection = (item: MediaCollectionItem) => collections.some((collection) => hasMediaCollectionItem(collection, item))
+  // 评分徽标：有评分才显示（网格 tags 槽位 / 列表 collectionBadges 槽位共用）
+  const ratingChipFor = (item: MediaCollectionItem): React.ReactNode => {
+    const stars = ratingOf(item)
+    if (!stars) return null
+    return <span className="rating-chip" title={t('library.ratingBadge', { stars })}>★ {stars}</span>
+  }
   const membershipBadges = (item: MediaCollectionItem): React.ReactNode[] => {
     if (activeCollectionId !== 'all') return []
     const memberships = collections.filter((collection) => hasMediaCollectionItem(collection, item))
@@ -238,7 +246,9 @@ const FileList: React.FC<FileListProps> = ({ torrent, torrents, onSelectTorrent,
       inCollection: !!activeCollection && hasMediaCollectionItem(activeCollection, item),
       onAdd: (collectionId) => { void updateCollectionItems(collectionId, [item], 'add').then((ok) => { if (ok) setCollectionNotice(t('library.itemsAdded', { count: 1 })) }) },
       onRemoveFromCollection: () => { if (activeCollection) void updateCollectionItems(activeCollection.id, [item], 'remove').then((ok) => { if (ok) setCollectionNotice(t('library.itemsRemoved', { count: 1, name: activeCollection.name })) }) },
-      onRemove: actions.remove
+      onRemove: actions.remove,
+      rating: ratingOf(item),
+      onRate: (stars) => { void rateItem(item, stars) }
     })
   }
   const handleMediaDragStart = (event: React.DragEvent<HTMLDivElement>, item: MediaCollectionItem) => {
@@ -336,6 +346,24 @@ const FileList: React.FC<FileListProps> = ({ torrent, torrents, onSelectTorrent,
     return () => { active = false }
   }, [localWatchKey, localLibrary])
 
+  // 评分（1-5 星）：挂载时拉全量，set 后用主进程返回值整体替换（同 collections 刷新模式）
+  const [ratings, setRatings] = useState<Record<string, number>>({})
+  const ratingOf = (item: MediaCollectionItem) => ratings[mediaCollectionItemKey(item)] ?? 0
+  useEffect(() => {
+    let active = true
+    void ipc.ratingsGet().then((result) => {
+      if (!active) return
+      if (result.success && result.data) setRatings(Object.fromEntries(Object.entries(result.data).map(([key, entry]) => [key, entry.stars])))
+    }).catch(() => undefined)
+    return () => { active = false }
+  }, [])
+  const rateItem = async (item: MediaCollectionItem, stars: number) => {
+    const result = await ipc.ratingsSet(mediaCollectionItemKey(item), stars).catch(() => null)
+    if (result?.success && result.data) setRatings(Object.fromEntries(Object.entries(result.data).map(([key, entry]) => [key, entry.stars])))
+    // 菜单开着时同步选中态（menu 数据是打开时的快照）
+    setContextMenu((current) => current ? { ...current, rating: stars } : current)
+  }
+
   // 库列表：网格 / 紧凑列表共用同一份数据与移除确认逻辑
   const confirmRemoveCard = (item: TorrentStatus) => setPending({ kind: 'task', item })
   const localSection = collectionLocals.length > 0 && (
@@ -354,7 +382,7 @@ const FileList: React.FC<FileListProps> = ({ torrent, torrents, onSelectTorrent,
                 missing={entry.missing}
                 thumb={<VideoThumb infoHash={LOCAL_MEDIA_HASH} file={localEntryToFile(entry)} className="tile-icon" fallback={entry.type === 'audio' ? '♫' : '▶'} />}
                 title={entry.name}
-                tags={<><span className="task-type">{t('library.localTag')}</span>{entry.missing && <span className="task-error">{t('library.localMissing')}</span>}{badges}<WatchBadge watch={watch} /></>}
+                tags={<><span className="task-type">{t('library.localTag')}</span>{entry.missing && <span className="task-error">{t('library.localMissing')}</span>}{badges}{ratingChipFor(mediaItem)}<WatchBadge watch={watch} /></>}
                 progress={watchPercent(watch)}
                 meta={<span title={entry.path}>{formatSize(entry.size)}</span>}
                 onOpen={() => { if (!entry.missing) onPlayLocalFile(entry) }}
@@ -383,7 +411,7 @@ const FileList: React.FC<FileListProps> = ({ torrent, torrents, onSelectTorrent,
                 thumb={<VideoThumb infoHash={LOCAL_MEDIA_HASH} file={localEntryToFile(entry)} className="row-icon" fallback={entry.type === 'audio' ? '♫' : '▶'} />}
                 title={entry.name}
                 sub={<>{t('library.localTag')} · {formatSize(entry.size)}{entry.missing ? ` · ${t('library.localMissing')}` : ''}</>}
-                collectionBadges={badges.length > 0 && <div className="row-collection-badges">{badges}</div>}
+                collectionBadges={(badges.length > 0 || ratingOf(mediaItem) > 0) && <div className="row-collection-badges">{badges}{ratingChipFor(mediaItem)}</div>}
                 progress={watchPercent(watch)}
                 trailing={<WatchBadge watch={watch} />}
                 onOpen={() => { if (!entry.missing) onPlayLocalFile(entry) }}
@@ -420,15 +448,17 @@ const FileList: React.FC<FileListProps> = ({ torrent, torrents, onSelectTorrent,
       if (filter === 'video') return item.files.some((file) => file.type === 'video')
       if (filter === 'audio') return !item.files.some((file) => file.type === 'video') && item.files.some((file) => file.type === 'audio')
       if (filter === 'unfinished') { const percent = watchPercent(watchMap[item.infoHash]); return percent > 0 && percent < 95 }
+      if (filter === 'topRated') return (ratings[mediaCollectionItemKey({ type: 'task', id: item.infoHash })] ?? 0) >= 4
       return true
     })
     const sorted = [...matched]
     if (sort === 'name') sorted.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }))
     else if (sort === 'size') sorted.sort((a, b) => b.totalSize - a.totalSize)
     else if (sort === 'watched') sorted.sort((a, b) => (watchMap[b.infoHash]?.updatedAt || 0) - (watchMap[a.infoHash]?.updatedAt || 0))
+    else if (sort === 'rating') sorted.sort((a, b) => (ratings[mediaCollectionItemKey({ type: 'task', id: b.infoHash })] ?? 0) - (ratings[mediaCollectionItemKey({ type: 'task', id: a.infoHash })] ?? 0))
     else sorted.sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0))
     return sorted
-  }, [collectionTorrents, keyword, filter, sort, watchMap])
+  }, [collectionTorrents, keyword, filter, sort, watchMap, ratings])
   const visibleMediaItems: MediaCollectionItem[] = [
     ...visible.map((item) => ({ type: 'task' as const, id: item.infoHash })),
     ...collectionLocals.map((entry) => ({ type: 'local' as const, id: entry.path }))
@@ -607,7 +637,7 @@ const FileList: React.FC<FileListProps> = ({ torrent, torrents, onSelectTorrent,
                     key={item.infoHash}
                     thumb={<VideoThumb infoHash={item.infoHash} file={file} className="tile-icon" fallback={placeholderIcon(item)} />}
                     title={item.name}
-                    tags={<>{episodeSummary(item) && <span className="episode-tag">{episodeSummary(item)}</span>}{badges}<WatchBadge watch={watch} /></>}
+                    tags={<>{episodeSummary(item) && <span className="episode-tag">{episodeSummary(item)}</span>}{badges}{ratingChipFor(collectionItem)}<WatchBadge watch={watch} /></>}
                     progress={watchPercent(watch)}
                     meta={metaLine(item)}
                     onOpen={() => onSelectTorrent(item)}
@@ -632,7 +662,7 @@ const FileList: React.FC<FileListProps> = ({ torrent, torrents, onSelectTorrent,
                     thumb={<VideoThumb infoHash={item.infoHash} file={file} className="row-icon" fallback={placeholderIcon(item)} />}
                     title={item.name}
                     sub={<>{metaLine(item)}{episodeSummary(item) ? ` · ${episodeSummary(item)}` : ''}</>}
-                    collectionBadges={badges.length > 0 && <div className="row-collection-badges">{badges}</div>}
+                    collectionBadges={(badges.length > 0 || ratingOf(collectionItem) > 0) && <div className="row-collection-badges">{badges}{ratingChipFor(collectionItem)}</div>}
                     progress={watchPercent(watch)}
                     trailing={<WatchBadge watch={watch} />}
                     onOpen={() => onSelectTorrent(item)}

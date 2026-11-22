@@ -1,4 +1,4 @@
-import type { AppSettings, BatchAddSummary, CompatPlanResult, CompatProgressEvent, CompatStartResult, EngineNetworkStatus, GlobalStat, IPCResult, LocalMediaEntry, MediaCollection, MediaCollectionItem, TaskImportSummary, TaskPeer, TorrentFileInfo, TorrentStatus, WatchProgress } from '../types'
+import type { AppSettings, BatchAddSummary, CompatPlanResult, CompatProgressEvent, CompatStartResult, EngineNetworkStatus, GlobalStat, IPCResult, LocalMediaEntry, MediaCollection, MediaCollectionItem, RatingEntry, TaskHistoryEntry, TaskImportSummary, TaskPeer, TorrentFileInfo, TorrentStatus, WatchProgress } from '../types'
 
 // capabilities：该平台能否一键安装，决定设置页显示「安装」按钮还是面向普通用户的说明
 export interface InstallCapabilities { ytdlp: boolean; ffmpeg: boolean; deno: boolean }
@@ -69,6 +69,10 @@ export interface ElectronAPI {
   mediaCollectionRename: (id: string, name: string) => Promise<IPCResult<MediaCollection[]>>
   mediaCollectionRemove: (id: string) => Promise<IPCResult<MediaCollection[]>>
   mediaCollectionUpdateItems: (id: string, items: MediaCollectionItem[], action: 'add' | 'remove') => Promise<IPCResult<MediaCollection[]>>
+  taskHistoryList: () => Promise<IPCResult<TaskHistoryEntry[]>>
+  taskHistoryClear: () => Promise<IPCResult<TaskHistoryEntry[]>>
+  ratingsGet: () => Promise<IPCResult<Record<string, RatingEntry>>>
+  ratingsSet: (key: string, stars: number) => Promise<IPCResult<Record<string, RatingEntry>>>
   getLocalMediaUrl: (localPath: string) => Promise<string>
   getLocalSubtitles: (videoPath: string) => Promise<IPCResult<TorrentFileInfo[]>>
   pickDownloadDir: () => Promise<IPCResult<string>>
@@ -175,6 +179,10 @@ export const ipc: ElectronAPI = {
   mediaCollectionRename: (id, name) => getElectronAPI().mediaCollectionRename(id, name),
   mediaCollectionRemove: (id) => getElectronAPI().mediaCollectionRemove(id),
   mediaCollectionUpdateItems: (id, items, action) => getElectronAPI().mediaCollectionUpdateItems(id, items, action),
+  taskHistoryList: () => getElectronAPI().taskHistoryList(),
+  taskHistoryClear: () => getElectronAPI().taskHistoryClear(),
+  ratingsGet: () => getElectronAPI().ratingsGet(),
+  ratingsSet: (key, stars) => getElectronAPI().ratingsSet(key, stars),
   getLocalMediaUrl: (localPath) => getElectronAPI().getLocalMediaUrl(localPath),
   getLocalSubtitles: (videoPath) => getElectronAPI().getLocalSubtitles(videoPath),
   pickDownloadDir: () => getElectronAPI().pickDownloadDir(),

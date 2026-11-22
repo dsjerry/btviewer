@@ -81,6 +81,26 @@ export interface TaskListEntry {
   addedAt: number
 }
 
+// 任务历史（从下载引擎移除/完成后的留档，补 tasks.json 不存的运行期字段）
+export interface TaskHistoryEntry {
+  id: string             // infoHash（BT）或 sha1(source)（直链/视频），与 taskSources 键一致
+  name: string
+  type: TaskProtocol
+  source: string         // 磁力或原始链接
+  saveDir?: string
+  totalSize?: number
+  downloaded?: number
+  uploaded?: number
+  fileCount?: number
+  addedAt?: number
+  completedAt?: number
+  removedAt?: number
+  destroy?: boolean      // 移除时是否勾选了删除文件
+}
+
+// 媒体评分（键 = mediaCollectionItemKey，即 task:${hash} / local:${path}）
+export interface RatingEntry { stars: number; updatedAt: number }
+
 // 清单导入结果
 export interface TaskImportSummary {
   added: number

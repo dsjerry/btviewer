@@ -472,6 +472,22 @@ html[data-theme='light'] .download-status.parsing span{background:#8a6d1f}
 .tile-body>small{overflow:hidden;margin-top:auto;text-overflow:ellipsis;white-space:nowrap;color:var(--text-dim5);font:11px 'DM Mono',monospace}
 .tile-tags{display:flex;flex-wrap:wrap;align-items:center;gap:8px;min-width:0}
 
+/* 媒体评分：右键菜单评分行（点击星级不关菜单）+ 磁贴/列表徽标 */
+.media-context-rating{display:flex;align-items:center;gap:12px}
+.media-context-rating .media-context-label{padding:6px 10px 3px}
+.rating-stars{display:flex;gap:3px;padding-right:10px}
+.rating-star{border:0;background:transparent;color:var(--text-dim);font-size:14px;line-height:1;padding:2px 1px;cursor:pointer;transition:color .15s ease,transform .15s ease}
+.rating-star:hover{color:var(--text);transform:scale(1.15)}
+.rating-star.is-active{color:var(--accent-text)}
+.rating-chip{flex:none;padding:3px 8px;border:1px solid var(--border-accent-soft);border-radius:999px;color:var(--accent-text);background:var(--bg-accent-soft);font:10.5px 'DM Mono',monospace;white-space:nowrap}
+/* 任务历史行：轻量留档列表（非完整任务卡） */
+.history-stack{display:grid;gap:12px}
+.history-item{padding:16px 18px;background:var(--bg-card);border:1px solid var(--border-card);border-radius:8px}
+.history-main{display:flex;align-items:center;gap:14px;min-width:0}
+.history-main h3{overflow:hidden;flex:1;min-width:0;margin:0;font-size:14px;text-overflow:ellipsis;white-space:nowrap}
+.history-when{flex:none;color:var(--text-dim5);font:11px 'DM Mono',monospace}
+.history-meta{display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin-top:10px;color:var(--text-dim6);font:11px 'DM Mono',monospace}
+.history-meta .history-path{flex:1;min-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-dim3)}
 /* 媒体库列表行：悬停点亮（含左侧强调条），紧凑列表行内边距略小于卡片 */
 .library-row{transition:border-color .18s ease,background .18s ease,box-shadow .18s ease;user-select:none}
 .library-row:hover{background:var(--bg-row-hover)}
