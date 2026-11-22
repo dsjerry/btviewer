@@ -472,6 +472,12 @@ html[data-theme='light'] .download-status.parsing span{background:#8a6d1f}
 .tile-body>small{overflow:hidden;margin-top:auto;text-overflow:ellipsis;white-space:nowrap;color:var(--text-dim5);font:11px 'DM Mono',monospace}
 .tile-tags{display:flex;flex-wrap:wrap;align-items:center;gap:8px;min-width:0}
 
+/* 智能合集：侧栏分组 + 规则编辑行 */
+.sidebar-smart-head{margin-top:18px}
+.collection-rule-row{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+.collection-rule-row > span{flex:none;width:88px;color:var(--text-dim2);font:11px 'DM Mono',monospace}
+.collection-rule-row select{flex:1;min-width:0;width:auto}
+.collection-rule-hint{margin:4px 0 8px;color:var(--text-note);font-size:11px;line-height:1.6}
 /* 媒体评分：右键菜单评分行（点击星级不关菜单）+ 磁贴/列表徽标 */
 .media-context-rating{display:flex;align-items:center;gap:12px}
 .media-context-rating .media-context-label{padding:6px 10px 3px}
@@ -657,7 +663,7 @@ html[data-theme='light'] .download-status.parsing span{background:#8a6d1f}
 
 /* ── 播放器右缘悬浮工具：截图 / 录制（玻璃圆钮，悬停点亮；录制中红描边） ── */
 .player-side-tools{position:absolute;top:30px;right:30px;z-index:20;display:flex;flex-direction:column;gap:12px}
-.side-tool{display:grid;place-items:center;width:46px;height:46px;padding:0;border:1px solid var(--glass-border);border-radius:50%;color:#f4f7e6;background:rgba(14,16,11,.55);backdrop-filter:blur(10px) saturate(140%);-webkit-backdrop-filter:blur(10px) saturate(140%);cursor:pointer;opacity:.8;transition:opacity .18s ease,border-color .18s ease,background .18s ease,color .18s ease,transform .18s ease}
+.side-tool{display:grid;place-items:center;width:46px;height:46px;padding:0;border:1px solid rgba(244,247,230,.18);border-radius:50%;color:#f4f7e6;background:rgba(14,16,11,.6);backdrop-filter:blur(10px) saturate(140%);-webkit-backdrop-filter:blur(10px) saturate(140%);cursor:pointer;opacity:.8;transition:opacity .18s ease,border-color .18s ease,background .18s ease,color .18s ease,transform .18s ease}
 .side-tool:hover{opacity:1;border-color:rgba(216,243,106,.55);background:rgba(22,26,15,.82);color:#eaffad;transform:translateY(-1px)}
 .side-tool:focus-visible{outline:1px solid var(--border-focus);outline-offset:2px}
 .side-tool.is-recording{opacity:1;border-color:rgba(255,107,94,.6);color:#ff6b5e}
@@ -673,7 +679,8 @@ html[data-theme='light'] .download-status.parsing span{background:#8a6d1f}
 /* ── 播放器控制条主题：玻璃悬浮条 + 霓虹进度（覆盖 video.js 默认肤） ──
    选择器一律带 .player-stage 前缀抬高特异性：video-js.css 随 Player 懒加载注入，
    排位在 global.css 之后，同特异性会被它压回去 */
-.player-stage .video-js .vjs-control-bar{left:14px;right:14px;bottom:12px;width:auto;height:3em;border:1px solid var(--glass-border);border-radius:14px;background:linear-gradient(145deg,var(--glass-highlight),transparent 48%),var(--glass-surface-strong);backdrop-filter:blur(20px) saturate(150%);-webkit-backdrop-filter:blur(20px) saturate(150%);box-shadow:0 12px 32px rgba(0,0,0,.4),inset 0 1px var(--glass-highlight);transition:visibility .25s ease,opacity .25s ease,transform .25s ease}
+/* 控制条浮在视频内容上：不跟随界面主题（亮色视频帧上玻璃白条会看不清），固定深色底 + 亮图标 */
+.player-stage .video-js .vjs-control-bar{left:14px;right:14px;bottom:12px;width:auto;height:3em;border:1px solid rgba(244,247,230,.16);border-radius:14px;background:rgba(14,16,11,.78);backdrop-filter:blur(20px) saturate(150%);-webkit-backdrop-filter:blur(20px) saturate(150%);box-shadow:0 12px 32px rgba(0,0,0,.4),inset 0 1px rgba(255,255,255,.08);transition:visibility .25s ease,opacity .25s ease,transform .25s ease}
 /* 自动隐藏时轻微下沉，配合原生 opacity 过渡更柔和 */
 .player-stage .video-js.vjs-has-started.vjs-user-inactive.vjs-playing .vjs-control-bar{transform:translateY(8px)}
 /* 图标统一亮色 + 悬停点亮，去掉原生 text-shadow */
@@ -681,7 +688,7 @@ html[data-theme='light'] .download-status.parsing span{background:#8a6d1f}
 .player-stage .video-js .vjs-control-bar .vjs-control .vjs-icon-placeholder:before{color:#f4f7e6;text-shadow:none}
 .player-stage .video-js .vjs-control-bar .vjs-control:hover .vjs-icon-placeholder:before,.player-stage .video-js .vjs-control-bar .vjs-control:focus .vjs-icon-placeholder:before{color:#eaffad;text-shadow:none}
 /* 时间文字：等宽字体 + 弱化色 */
-.player-stage .video-js .vjs-time-control{font-family:'DM Mono',monospace;font-size:11px;line-height:3em;min-width:2em;color:var(--text-secondary);text-shadow:none}
+.player-stage .video-js .vjs-time-control{font-family:'DM Mono',monospace;font-size:11px;line-height:3em;min-width:2em;color:rgba(244,247,230,.8);text-shadow:none}
 .player-stage .video-js .vjs-time-divider{color:var(--text-dim);text-shadow:none}
 /* 进度条：轨道 / 缓冲 / 已播放（霓虹渐变）/ 播放头 */
 .player-stage .video-js .vjs-progress-control .vjs-progress-holder{height:.4em;border-radius:99px;background:rgba(244,247,230,.18)}
@@ -698,7 +705,7 @@ html[data-theme='light'] .download-status.parsing span{background:#8a6d1f}
 .player-stage .video-js .vjs-volume-level .vjs-svg-icon{fill:var(--accent)}
 .player-stage .video-js .vjs-volume-level:before{color:var(--accent);text-shadow:none}
 /* 弹出菜单（倍速/3D 视角）：玻璃面板 + 悬停点亮；选中态用 accent 而非白底 */
-.player-stage .video-js .vjs-menu-button-popup .vjs-menu{border:1px solid var(--glass-border);border-radius:12px;background:linear-gradient(145deg,var(--glass-highlight),transparent 48%),var(--glass-surface-strong);backdrop-filter:blur(20px) saturate(150%);-webkit-backdrop-filter:blur(20px) saturate(150%);box-shadow:0 16px 40px rgba(0,0,0,.45)}
+.player-stage .video-js .vjs-menu-button-popup .vjs-menu{border:1px solid rgba(244,247,230,.16);border-radius:12px;background:rgba(14,16,11,.92);backdrop-filter:blur(20px) saturate(150%);-webkit-backdrop-filter:blur(20px) saturate(150%);box-shadow:0 16px 40px rgba(0,0,0,.45)}
 .player-stage .video-js .vjs-menu-content{background:transparent}
 .player-stage .video-js .vjs-menu li{color:#f4f7e6;text-transform:none}
 .player-stage .video-js .vjs-menu li.vjs-menu-item:hover,.player-stage .video-js .vjs-menu li.vjs-menu-item:focus{background:rgba(216,243,106,.14);color:#eaffad}
