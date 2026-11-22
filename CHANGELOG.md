@@ -2,6 +2,19 @@
 
 > 本文件从 1.1.0 起维护；更早版本的变更请查看 [GitHub Releases](https://github.com/dsjerry/btviewer/releases)。
 
+## [1.2.1]
+
+### 修复
+
+- **mac 安装包（未配置 Developer ID 证书的 ad-hoc 构建）在 macOS 26/27 上启动即崩溃**
+  （「BTViewer 因出现问题而无法打开」）：ad-hoc 兜底签名此前带 hardened runtime 标志，
+  macOS 26+ 的库校验会拒绝 ad-hoc 进程加载任何其他 ad-hoc 库（dyld 报 "different Team IDs"）。
+  兜底签名不再启用 hardened runtime；本机实测可正常启动。已装 1.2.0 的用户可就地修复：
+  ```bash
+  codesign --force --deep -s - /Applications/BTViewer.app
+  ```
+  （等价效果：去掉 hardened runtime 标志；若报权限错误加 sudo）
+
 ## [1.2.0]
 
 ### 新增
