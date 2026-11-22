@@ -57,21 +57,23 @@ nsis:
   createDesktopShortcut: true
   createStartMenuShortcut: true
   shortcutName: BTViewer
+# DMG 安装窗口（顶层键，不属于 mac 段）：深色品牌背景
+# （scripts/generate-dmg-background.mjs 生成，Retina @2x 同目录自动取用）
+dmg:
+  background: resources/dmg/background.png
+  window:
+    width: 660
+    height: 400
+  contents:
+    - { x: 210, y: 250, type: file, path: BTViewer.app }
+    - { x: 465, y: 250, type: link, path: /Applications }
+
 mac:
   target:
     - dmg
     - zip
   icon: resources/icon.icns
   category: public.app-category.utilities
-  # DMG 安装窗口：深色品牌背景（scripts/generate-dmg-background.mjs 生成，Retina @2x 同目录自动取用）
-  dmg:
-    background: resources/dmg/background.png
-    window:
-      width: 660
-      height: 400
-    contents:
-      - { x: 210, y: 250, type: file, path: BTViewer.app }
-      - { x: 465, y: 250, type: link, path: /Applications }
   # universal 包必须同时保留 resources/aria2/mac-x64 与 mac-arm64 两份 aria2：
   # universal 运行时 process.arch 是当前真实架构，resolveAria2Binary 会按它选目录。
   # 签名与公证都从环境变量取，缺省时自动降级（CI 未配 secrets 也能出可测试的包）：
