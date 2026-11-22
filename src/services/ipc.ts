@@ -1,4 +1,4 @@
-import type { AppSettings, BatchAddSummary, CompatPlanResult, CompatProgressEvent, CompatStartResult, EngineNetworkStatus, GlobalStat, IPCResult, LocalMediaEntry, MediaCollection, MediaCollectionItem, RatingEntry, TaskHistoryEntry, TaskImportSummary, TaskPeer, TorrentFileInfo, TorrentStatus, WatchProgress } from '../types'
+import type { AppSettings, BatchAddSummary, CompatPlanResult, CompatProgressEvent, CompatStartResult, EngineNetworkStatus, GlobalStat, IPCResult, LocalMediaEntry, MediaCollection, MediaCollectionItem, RatingEntry, SmartCollection, SmartCollectionRules, TaskHistoryEntry, TaskImportSummary, TaskPeer, TorrentFileInfo, TorrentStatus, WatchProgress } from '../types'
 import type { StereoMode } from './stereo3d'
 
 // capabilities：该平台能否一键安装，决定设置页显示「安装」按钮还是面向普通用户的说明
@@ -75,6 +75,10 @@ export interface ElectronAPI {
   ratingsGet: () => Promise<IPCResult<Record<string, RatingEntry>>>
   ratingsSet: (key: string, stars: number) => Promise<IPCResult<Record<string, RatingEntry>>>
   stereoProbe: (infoHash: string, filePath: string) => Promise<StereoMode | null>
+  smartCollectionsList: () => Promise<IPCResult<SmartCollection[]>>
+  smartCollectionCreate: (name: string, rules: SmartCollectionRules) => Promise<IPCResult<SmartCollection[]>>
+  smartCollectionRename: (id: string, name: string) => Promise<IPCResult<SmartCollection[]>>
+  smartCollectionRemove: (id: string) => Promise<IPCResult<SmartCollection[]>>
   getLocalMediaUrl: (localPath: string) => Promise<string>
   getLocalSubtitles: (videoPath: string) => Promise<IPCResult<TorrentFileInfo[]>>
   pickDownloadDir: () => Promise<IPCResult<string>>
@@ -186,6 +190,10 @@ export const ipc: ElectronAPI = {
   ratingsGet: () => getElectronAPI().ratingsGet(),
   ratingsSet: (key, stars) => getElectronAPI().ratingsSet(key, stars),
   stereoProbe: (infoHash, filePath) => getElectronAPI().stereoProbe(infoHash, filePath),
+  smartCollectionsList: () => getElectronAPI().smartCollectionsList(),
+  smartCollectionCreate: (name, rules) => getElectronAPI().smartCollectionCreate(name, rules),
+  smartCollectionRename: (id, name) => getElectronAPI().smartCollectionRename(id, name),
+  smartCollectionRemove: (id) => getElectronAPI().smartCollectionRemove(id),
   getLocalMediaUrl: (localPath) => getElectronAPI().getLocalMediaUrl(localPath),
   getLocalSubtitles: (videoPath) => getElectronAPI().getLocalSubtitles(videoPath),
   pickDownloadDir: () => getElectronAPI().pickDownloadDir(),

@@ -8,9 +8,10 @@ import { ConfirmDialog } from './ConfirmDialog'
 import { MediaCollectionDialog } from './MediaCollectionDialog'
 import { MediaContextMenu, type MediaMenuData } from './MediaContextMenu'
 import { LibraryRow, LibraryTile, playableFile, placeholderIcon, VideoThumb, WatchBadge } from './library-bits'
-import type { LocalMediaEntry, MediaCollection, MediaCollectionItem, TorrentFileInfo, TorrentStatus, WatchProgress } from '../types'
+import type { LocalMediaEntry, MediaCollection, MediaCollectionItem, SmartCollection, SmartCollectionRules, TorrentFileInfo, TorrentStatus, WatchProgress } from '../types'
 import { LOCAL_MEDIA_HASH } from '../types'
 import { hasMediaCollectionItem, isMediaCollectionItem, mediaCollectionItemKey } from '../services/media-collections'
+import { isSmartCollectionId, matchesSmartCollection, smartCollectionKey } from '../services/smart-collections'
 interface FileListProps {
   torrent: TorrentStatus | null
   torrents: TorrentStatus[]
@@ -62,6 +63,8 @@ const downloadHint = (torrent: TorrentStatus) => {
 type CollectionDialogState =
   | { mode: 'create' }
   | { mode: 'rename'; collection: MediaCollection }
+  | { mode: 'smart-create' }
+  | { mode: 'smart-rename'; collection: SmartCollection }
 const MEDIA_DRAG_TYPE = 'application/x-btviewer-media-items'
 
 interface FileRowProps { infoHash: string; file: TorrentFileInfo; onPlayFile: (file: TorrentFileInfo) => void }
@@ -98,8 +101,18 @@ const FileList: React.FC<FileListProps> = ({ torrent, torrents, onSelectTorrent,
     }).catch(() => { if (active) setCollectionsLoaded(true) })
     return () => { active = false }
   }, [])
+  // 智能合集：定义从主进程拉取；匹配按当前库内容实时求值（评分/进度/类型都在渲染层手里）
+  const [smartCollections, setSmartCollections] = useState<SmartCollection[]>([])
+  useEffect(() => {
+    let active = true
+    void ipc.smartCollectionsList().then((result) => {
+      if (active && result.success && result.data) setSmartCollections(result.data)
+    }).catch(() => undefined)
+    return () => { active = false }
+  }, [])
   useEffect(() => {
     if (!collectionsLoaded || activeCollectionId === 'all' || activeCollectionId === 'ungrouped' || collections.some((collection) => collection.id === activeCollectionId)) return
+    if (isSmartCollectionId(activeCollectionId)) return
     setActiveCollectionId('all')
     localStorage.setItem('btviewer-library-collection', 'all')
   }, [activeCollectionId, collections, collectionsLoaded])
@@ -111,6 +124,31 @@ const FileList: React.FC<FileListProps> = ({ torrent, torrents, onSelectTorrent,
     setCollectionNotice('')
   }
   const activeCollection = collections.find((collection) => collection.id === activeCollectionId) ?? null
+  const activeSmart = isSmartCollectionId(activeCollectionId) ? smartCollections.find((collection) => smartCollectionKey(collection.id) === activeCollectionId) ?? null : null
+  // 智能合集匹配上下文：观看进度 / 评分 / 加入时间 / 媒体类型都来自渲染层现有状态
+  const smartContextForTask = (item: TorrentStatus) => ({
+    watchPercent: watchPercent(watchMap[item.infoHash]),
+    rating: ratingOf({ type: 'task', id: item.infoHash }),
+    addedAt: item.addedAt || 0,
+    kind: item.files.some((file) => file.type === 'video') ? 'video' as const : item.files.some((file) => file.type === 'audio') ? 'audio' as const : undefined,
+    now: Date.now()
+  })
+  const smartContextForLocal = (entry: LocalMediaEntry) => ({
+    watchPercent: watchPercent(localWatchMap[entry.path]),
+    rating: ratingOf({ type: 'local', id: entry.path }),
+    addedAt: entry.addedAt,
+    kind: entry.type,
+    now: Date.now()
+  })
+  const smartMatchesItem = (collection: SmartCollection, item: MediaCollectionItem): boolean => {
+    if (item.type === 'task') {
+      const torrent = torrents.find((candidate) => candidate.infoHash === item.id)
+      return !!torrent && matchesSmartCollection(collection.rules, smartContextForTask(torrent))
+    }
+    const entry = localLibrary.find((candidate) => candidate.path === item.id)
+    return !!entry && matchesSmartCollection(collection.rules, smartContextForLocal(entry))
+  }
+  const smartCount = (collection: SmartCollection) => allMediaItems.filter((item) => smartMatchesItem(collection, item)).length
   useEffect(() => {
     if (collections.some((collection) => collection.id === targetCollectionId)) return
     setTargetCollectionId(activeCollection?.id || collections[0]?.id || '')
@@ -161,11 +199,25 @@ const FileList: React.FC<FileListProps> = ({ torrent, torrents, onSelectTorrent,
           : true)
       && (!text || entry.name.toLowerCase().includes(text)))
   }, [activeCollection, activeCollectionId, collections, localLibrary, keyword])
-  const saveCollectionDialog = async (dialog: CollectionDialogState, value: string): Promise<boolean> => {
+  const saveCollectionDialog = async (dialog: CollectionDialogState, value: string, rules?: SmartCollectionRules): Promise<boolean> => {
     try {
-      const result = dialog.mode === 'create'
-        ? await ipc.mediaCollectionCreate(value)
-        : await ipc.mediaCollectionRename(dialog.collection.id, value)
+      if (dialog.mode === 'smart-create' || dialog.mode === 'smart-rename') {
+        const result = dialog.mode === 'smart-create'
+          ? await ipc.smartCollectionCreate(value, rules!)
+          : await ipc.smartCollectionRename(dialog.collection.id, value)
+        if (!result.success || !result.data) {
+          setCollectionError(result.error || t('library.collectionError'))
+          return false
+        }
+        setSmartCollections(result.data)
+        setCollectionError('')
+        if (dialog.mode === 'smart-create') {
+          const created = result.data.find((collection) => !smartCollections.some((existing) => existing.id === collection.id))
+          if (created) selectCollection(smartCollectionKey(created.id))
+        }
+        return true
+      }
+      const result = dialog.mode === 'create' ? await ipc.mediaCollectionCreate(value) : await ipc.mediaCollectionRename(dialog.collection.id, value)
       if (!result.success || !result.data) {
         setCollectionError(result.error || t('library.collectionError'))
         return false
@@ -180,6 +232,18 @@ const FileList: React.FC<FileListProps> = ({ torrent, torrents, onSelectTorrent,
     } catch (error) {
       setCollectionError(error instanceof Error ? error.message : t('library.collectionError'))
       return false
+    }
+  }
+  const deleteSmartCollection = async (collection: SmartCollection) => {
+    if (!window.confirm(t('library.deleteSmartConfirm', { name: collection.name }))) return
+    try {
+      const result = await ipc.smartCollectionRemove(collection.id)
+      if (!result.success || !result.data) { setCollectionError(result.error || t('library.collectionError')); return }
+      setSmartCollections(result.data)
+      if (activeCollectionId === smartCollectionKey(collection.id)) selectCollection('all')
+      setCollectionError('')
+    } catch (error) {
+      setCollectionError(error instanceof Error ? error.message : t('library.collectionError'))
     }
   }
   const updateCollectionItems = async (collectionId: string, items: MediaCollectionItem[], action: 'add' | 'remove'): Promise<boolean> => {
@@ -364,14 +428,24 @@ const FileList: React.FC<FileListProps> = ({ torrent, torrents, onSelectTorrent,
     setContextMenu((current) => current ? { ...current, rating: stars } : current)
   }
 
+  // 智能合集选中时按规则过滤（评分/进度状态在上方才声明，故独立于 collectionTorrents/Locals 求值）
+  const smartTasks = useMemo(() => activeSmart ? torrents.filter((item) => matchesSmartCollection(activeSmart.rules, smartContextForTask(item))) : null, [activeSmart, torrents, watchMap, ratings])
+  const smartLocals = useMemo(() => {
+    if (!activeSmart) return null
+    const text = keyword.trim().toLowerCase()
+    return localLibrary.filter((entry) => matchesSmartCollection(activeSmart.rules, smartContextForLocal(entry)) && (!text || entry.name.toLowerCase().includes(text)))
+  }, [activeSmart, localLibrary, localWatchMap, ratings, keyword])
+  const effectiveTasks = smartTasks ?? collectionTorrents
+  const effectiveLocals = smartLocals ?? collectionLocals
+
   // 库列表：网格 / 紧凑列表共用同一份数据与移除确认逻辑
   const confirmRemoveCard = (item: TorrentStatus) => setPending({ kind: 'task', item })
-  const localSection = collectionLocals.length > 0 && (
+  const localSection = effectiveLocals.length > 0 && (
     <div className="local-library">
-      <div className="library-section-head"><span>{t('library.localSection')}</span><small>{collectionLocals.length}</small></div>
+      <div className="library-section-head"><span>{t('library.localSection')}</span><small>{effectiveLocals.length}</small></div>
       {view === 'grid' ? (
         <div className="torrent-grid">
-          {collectionLocals.map((entry) => {
+          {effectiveLocals.map((entry) => {
             const watch = localWatchMap[entry.path]
             const mediaItem = { type: 'local' as const, id: entry.path }
             const badges = membershipBadges(mediaItem)
@@ -399,7 +473,7 @@ const FileList: React.FC<FileListProps> = ({ torrent, torrents, onSelectTorrent,
         </div>
       ) : (
         <div className="library-list">
-          {collectionLocals.map((entry) => {
+          {effectiveLocals.map((entry) => {
             const watch = localWatchMap[entry.path]
             const mediaItem = { type: 'local' as const, id: entry.path }
             const badges = membershipBadges(mediaItem)
@@ -443,7 +517,7 @@ const FileList: React.FC<FileListProps> = ({ torrent, torrents, onSelectTorrent,
   // 检索/筛选/排序：排序键含「最近添加」（addedAt）与「最近观看」（观看进度更新时间）
   const visible = useMemo(() => {
     const text = keyword.trim().toLowerCase()
-    const matched = collectionTorrents.filter((item) => {
+    const matched = effectiveTasks.filter((item) => {
       if (text && !item.name.toLowerCase().includes(text)) return false
       if (filter === 'video') return item.files.some((file) => file.type === 'video')
       if (filter === 'audio') return !item.files.some((file) => file.type === 'video') && item.files.some((file) => file.type === 'audio')
@@ -458,10 +532,10 @@ const FileList: React.FC<FileListProps> = ({ torrent, torrents, onSelectTorrent,
     else if (sort === 'rating') sorted.sort((a, b) => (ratings[mediaCollectionItemKey({ type: 'task', id: b.infoHash })] ?? 0) - (ratings[mediaCollectionItemKey({ type: 'task', id: a.infoHash })] ?? 0))
     else sorted.sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0))
     return sorted
-  }, [collectionTorrents, keyword, filter, sort, watchMap, ratings])
+  }, [effectiveTasks, keyword, filter, sort, watchMap, ratings])
   const visibleMediaItems: MediaCollectionItem[] = [
     ...visible.map((item) => ({ type: 'task' as const, id: item.infoHash })),
-    ...collectionLocals.map((entry) => ({ type: 'local' as const, id: entry.path }))
+    ...effectiveLocals.map((entry) => ({ type: 'local' as const, id: entry.path }))
   ]
   const visibleKeys = visibleMediaItems.map(mediaCollectionItemKey)
   const visibleSelectedCount = visibleKeys.filter((key) => selectedKeys.has(key)).length
@@ -568,11 +642,29 @@ const FileList: React.FC<FileListProps> = ({ torrent, torrents, onSelectTorrent,
                 </div>
               ))}
             </nav>
+            <div className="library-sidebar-head sidebar-smart-head">
+              <strong>{t('library.smartSection')}</strong>
+              <button className="sidebar-create" title={t('library.createSmart')} aria-label={t('library.createSmart')} onClick={() => { setCollectionError(''); setCollectionDialog({ mode: 'smart-create' }) }}>＋</button>
+            </div>
+            <nav className="collection-nav">
+              {smartCollections.map((collection) => (
+                <div key={collection.id} className={`collection-nav-row ${activeCollectionId === smartCollectionKey(collection.id) ? 'is-active' : ''}`}>
+                  <button className="collection-nav-item" onClick={() => selectCollection(smartCollectionKey(collection.id))}>
+                    <span className="collection-nav-icon">◈</span><span className="collection-nav-name">{collection.name}</span><small>{smartCount(collection)}</small>
+                  </button>
+                  <div className="collection-nav-actions">
+                    <button title={t('library.renameSmart')} aria-label={t('library.renameSmart')} onClick={(event) => { event.stopPropagation(); setCollectionError(''); setCollectionDialog({ mode: 'smart-rename', collection }) }}>✎</button>
+                    <button title={t('library.deleteSmart')} aria-label={t('library.deleteSmart')} onClick={(event) => { event.stopPropagation(); void deleteSmartCollection(collection) }}>×</button>
+                  </div>
+                </div>
+              ))}
+              {!smartCollections.length && <p className="collection-sidebar-hint">{t('library.smartHint')}</p>}
+            </nav>
             <p className="collection-sidebar-hint">{t('library.dragHint')}</p>
           </aside>
           <section className={`library-browser-main ${selectedKeys.size > 0 ? 'has-selection' : ''}`}>
             <div className="library-content-heading">
-              <div><span className="eyebrow">{t('library.collections')}</span><h3>{activeCollection?.name || (activeCollectionId === 'ungrouped' ? t('library.ungrouped') : t('library.allItems'))}</h3><small>{t('library.itemCount', { count: activeCollection ? collectionItemCount(activeCollection) : activeCollectionId === 'ungrouped' ? ungroupedCount : allMediaItems.length })}</small></div>
+              <div><span className="eyebrow">{t('library.collections')}</span><h3>{activeSmart?.name || activeCollection?.name || (activeCollectionId === 'ungrouped' ? t('library.ungrouped') : t('library.allItems'))}</h3><small>{t('library.itemCount', { count: activeSmart ? smartCount(activeSmart) : activeCollection ? collectionItemCount(activeCollection) : activeCollectionId === 'ungrouped' ? ungroupedCount : allMediaItems.length })}</small></div>
               <button className="small-button library-import" onClick={onImportLocal}>
                 <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                   <rect x="2.75" y="4.75" width="10.5" height="10.5" rx="2" />
@@ -613,7 +705,7 @@ const FileList: React.FC<FileListProps> = ({ torrent, torrents, onSelectTorrent,
             </div>}
             {collectionError && !collectionDialog && <p className="field-error">{collectionError}</p>}
             {collectionNotice && <p className="collection-notice" role="status">{collectionNotice}</p>}
-            {!visible.length && !collectionLocals.length && (
+            {!visible.length && !effectiveLocals.length && (
               activeCollection
                 ? collectionItemCount(activeCollection) === 0
                   ? <div className="empty-state"><span>▣</span><strong>{t('library.collectionEmpty')}</strong><p>{t('library.collectionEmptyHint')}</p></div>
@@ -680,11 +772,12 @@ const FileList: React.FC<FileListProps> = ({ torrent, torrents, onSelectTorrent,
           </section>
         </div>
         {collectionDialog && <MediaCollectionDialog
-          key={`${collectionDialog.mode}-${collectionDialog.mode === 'rename' ? collectionDialog.collection.id : ''}`}
+          key={`${collectionDialog.mode}-${collectionDialog.mode === 'rename' ? collectionDialog.collection.id : collectionDialog.mode === 'smart-rename' ? collectionDialog.collection.id : ''}`}
           mode={collectionDialog.mode}
-          name={collectionDialog.mode === 'rename' ? collectionDialog.collection.name : ''}
+          name={collectionDialog.mode === 'rename' ? collectionDialog.collection.name : collectionDialog.mode === 'smart-rename' ? collectionDialog.collection.name : ''}
+          rules={collectionDialog.mode === 'smart-rename' ? collectionDialog.collection.rules : undefined}
           error={collectionError}
-          onSave={(value) => saveCollectionDialog(collectionDialog, value)}
+          onSave={(value, rules) => saveCollectionDialog(collectionDialog, value, rules)}
           onClose={() => { setCollectionDialog(null); setCollectionError('') }}
         />}
         <ConfirmDialog

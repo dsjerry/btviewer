@@ -101,6 +101,21 @@ export interface TaskHistoryEntry {
 // 媒体评分（键 = mediaCollectionItemKey，即 task:${hash} / local:${path}）
 export interface RatingEntry { stars: number; updatedAt: number }
 
+// 智能合集：规则驱动的动态合集（全部规则须同时满足；空 rules 无意义，创建时强制至少一条）
+export interface SmartCollectionRules {
+  kind?: 'video' | 'audio'            // 媒体类型
+  watchState?: 'unfinished'           // 未看完（0 < 进度 < 95%）
+  minRating?: number                  // 评分下限（1-5）
+  addedWithinDays?: number            // 最近 N 天内添加
+}
+
+export interface SmartCollection {
+  id: string
+  name: string
+  createdAt: number
+  rules: SmartCollectionRules
+}
+
 // 清单导入结果
 export interface TaskImportSummary {
   added: number

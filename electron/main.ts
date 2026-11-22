@@ -13,6 +13,8 @@ import { createMediaCollection, listMediaCollections, removeMediaCollection, ren
 import { collectLaunchInputs, collectMediaLaunchInputs } from './launch-inputs'
 import { clearTaskHistory, listTaskHistory, recordTaskHistory, type TaskHistoryDraft } from './task-history'
 import { listRatings, setRating } from './ratings'
+import { createSmartCollection, listSmartCollections, removeSmartCollection, renameSmartCollection } from './smart-collections'
+import type { SmartCollectionRules } from '../src/types'
 import { planPostAction } from './post-action'
 import { createClipboardWatcher } from './clipboard-watch'
 import { formatSpeed } from '../src/services/task-meta'
@@ -928,6 +930,21 @@ function setupIPC() {
     } catch (error) {
       return { success: false, error: getErrorMessage(error) }
     }
+  })
+
+  // 智能合集：规则定义的持久化（匹配由渲染层按当前库内容实时求值）
+  ipcMain.handle('smart-collections:list', () => ({ success: true, data: listSmartCollections() }))
+  ipcMain.handle('smart-collections:create', (_event, name: string, rules: SmartCollectionRules) => {
+    try { return { success: true, data: createSmartCollection(String(name ?? ''), rules) } }
+    catch (error) { return { success: false, error: getErrorMessage(error) } }
+  })
+  ipcMain.handle('smart-collections:rename', (_event, id: string, name: string) => {
+    try { return { success: true, data: renameSmartCollection(String(id ?? ''), String(name ?? '')) } }
+    catch (error) { return { success: false, error: getErrorMessage(error) } }
+  })
+  ipcMain.handle('smart-collections:remove', (_event, id: string) => {
+    try { return { success: true, data: removeSmartCollection(String(id ?? '')) } }
+    catch (error) { return { success: false, error: getErrorMessage(error) } }
   })
 
   // 容器立体元数据探测：渲染层在立体关闭时调用（文件名提示的补充）

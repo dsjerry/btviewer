@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
+import type { SmartCollectionRules } from '../src/types'
 // 类型单一来源：接口定义在 src/services/ipc.ts，这里注解后方法签名不匹配会在编译期暴露
 import type { ElectronAPI } from '../src/services/ipc'
 import type { CompatProgressEvent, GlobalStat, TorrentStatus } from '../src/types'
@@ -81,6 +82,10 @@ const electronAPI: ElectronAPI = {
   ratingsGet: () => ipcRenderer.invoke('ratings:get'),
   ratingsSet: (key: string, stars: number) => ipcRenderer.invoke('ratings:set', key, stars),
   stereoProbe: (infoHash: string, filePath: string) => ipcRenderer.invoke('stereo:probe', infoHash, filePath),
+  smartCollectionsList: () => ipcRenderer.invoke('smart-collections:list'),
+  smartCollectionCreate: (name: string, rules: SmartCollectionRules) => ipcRenderer.invoke('smart-collections:create', name, rules),
+  smartCollectionRename: (id: string, name: string) => ipcRenderer.invoke('smart-collections:rename', id, name),
+  smartCollectionRemove: (id: string) => ipcRenderer.invoke('smart-collections:remove', id),
   mediaCollectionCreate: (name: string) => ipcRenderer.invoke('media-collections:create', name),
   mediaCollectionRename: (id: string, name: string) => ipcRenderer.invoke('media-collections:rename', id, name),
   mediaCollectionRemove: (id: string) => ipcRenderer.invoke('media-collections:remove', id),
