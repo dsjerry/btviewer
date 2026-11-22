@@ -119,7 +119,10 @@ jobs:
           # 内置二进制先各自签（--deep 对 hardened runtime 的嵌套可执行文件不可靠）
           find "$APP/Contents/Resources/aria2" "$APP/Contents/Resources/media" -type f -perm +111 2>/dev/null \
             | while read -r bin; do codesign --force -s - "$bin"; done
-          codesign --force --deep -s - --options runtime "$APP"
+          # 不带 --options runtime（hardened runtime）：ad-hoc 没有 Team ID，macOS 26+ 对
+          # ad-hoc 进程做库校验时会拒绝加载任何其他 ad-hoc 库（dyld 报 "different Team IDs"，
+          # 表现为启动即「因出现问题而无法打开」）。未公证的包开 runtime 没有任何收益
+          codesign --force --deep -s - "$APP"
           codesign --verify --deep --strict "$APP"
           codesign -dv "$APP" 2>&1 | grep -E "flags|Identifier"
           # 用签名后的 .app 重新生成 dmg/zip（旧归档先删，否则会被当成已存在而跳过）
