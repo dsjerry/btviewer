@@ -21,7 +21,8 @@ npm test           # vitest（纯函数单测）
 ## 图标资源
 
 - `resources/霓虹绿媒体下载播放器图标.png` 是图标唯一母版，保留原图不直接修改；运行 `node scripts/generate-icons.mjs` 同步生成 PNG、ICO、ICNS 及 `logo.svg`。`logo.svg` 是嵌入原始 PNG 的封装，不是矢量重绘。
-- 生成流程使用已有 `@resvg/resvg-js`，根据 alpha > 8 的主体边界规整透明留白，图案最长边占画布约 87.5%；界面通过 `src/components/AppIcon.tsx` 引用生成的 `resources/icon.png`。
+- 生成流程使用已有 `@resvg/resvg-js`，根据 alpha > 8 的主体边界规整透明留白，图案最长边占画布约 95%（留白过大会在 Finder/DMG 里像一圈白边）；界面通过 `src/components/AppIcon.tsx` 引用生成的 `resources/icon.png`。
+- DMG 安装窗口背景由 `scripts/generate-dmg-background.mjs` 生成到 `resources/dmg/background.png`（Retina `@2x` 同目录自动取用；中文用系统 PingFang，品牌字用仓库内置字体）；窗口尺寸与图标落点在 `electron-builder.yml` 的 `dmg` 段。
 - `tests/icons.test.ts` 校验原图嵌入、各平台资源一致性、macOS 1024px 及透明边距；无需加载系统字体。
 
 ## YouTube 解析要点（易踩坑）

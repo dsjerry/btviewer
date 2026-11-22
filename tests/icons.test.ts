@@ -64,10 +64,14 @@ describe('application icons', () => {
       expect(alphaAt(0, 0)).toBe(0)
       expect(alphaAt(size - 1, size - 1)).toBe(0)
       expect(alphaAt(Math.floor(size / 2), Math.floor(size / 2))).toBeGreaterThan(240)
-      expect(alphaAt(Math.floor(size / 2), 0)).toBe(0)
-      expect(alphaAt(0, Math.floor(size / 2))).toBe(0)
-      expect(alphaAt(size - 1, Math.floor(size / 2))).toBe(0)
-      expect(alphaAt(Math.floor(size / 2), size - 1)).toBe(0)
+      // 95% 填充下小尺寸（16/32）的边缘余量不足 1px，抗锯齿会让边缘像素带 alpha，
+      // 所以「边缘中点必须全透明」只对 ≥128 的尺寸断言（小尺寸由可见占比兜底）
+      if (size >= 128) {
+        expect(alphaAt(Math.floor(size / 2), 0)).toBe(0)
+        expect(alphaAt(0, Math.floor(size / 2))).toBe(0)
+        expect(alphaAt(size - 1, Math.floor(size / 2))).toBe(0)
+        expect(alphaAt(Math.floor(size / 2), size - 1)).toBe(0)
+      }
       let visiblePixels = 0
       for (let i = 0; i < pixels.length; i += 4) {
         if (pixels[i + 3] > 8) visiblePixels++

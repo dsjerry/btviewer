@@ -23,7 +23,8 @@ for (let y = 0; y < height; y++) {
 if (right < left || bottom < top) throw new Error('Source icon contains no visible artwork')
 const artworkWidth = right - left + 1
 const artworkHeight = bottom - top + 1
-const extent = Math.ceil(Math.max(artworkWidth, artworkHeight) / .875)
+// 填充率 95%：macOS 自定义图标（自带圆角底）应几乎撑满画布，留白过大在 Finder/DMG 里像一圈白边
+const extent = Math.ceil(Math.max(artworkWidth, artworkHeight) / .95)
 const viewX = left + (artworkWidth - extent) / 2
 const viewY = top + (artworkHeight - extent) / 2
 writeFileSync('resources/logo.svg', `<svg width="512" height="512" viewBox="${viewX} ${viewY} ${extent} ${extent}" xmlns="http://www.w3.org/2000/svg">
