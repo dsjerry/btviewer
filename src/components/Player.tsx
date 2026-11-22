@@ -438,6 +438,21 @@ const Player: React.FC<PlayerProps> = ({ infoHash, file, subtitles, playlist, on
   applyStereoRef.current = applyStereo
   useEffect(() => { applyStereoRef.current() }, [stereo, playerReady])
 
+  // 容器立体元数据探测（文件名提示的补充）：立体关闭且未命中文件名提示时，读 ffprobe 的
+  // stereo_mode / spherical 标记自动预选 VR180/SBS/TB；用户手动切换或记忆不受影响，
+  // 部分下载的文件探测可能失败（moov 缺失），失败保持现状
+  useEffect(() => {
+    let active = true
+    void (async () => {
+      try {
+        const detected = await ipc.stereoProbe(infoHash, file.path)
+        if (!active || !detected) return
+        setStereo((current) => current.layout === 'off' ? detected : current)
+      } catch { /* 探测失败保持现状 */ }
+    })()
+    return () => { active = false }
+  }, [infoHash, file.path])
+
   const stamp = () => {
     const now = new Date()
     const pad = (value: number) => String(value).padStart(2, '0')

@@ -10,6 +10,8 @@ import { writeJsonAtomic } from './storage'
 import { clearDetectCache, detectBinary, detectJsRuntime, isHlsUrl, jsRuntimeArg, parseProgressLine, probeVideoSite, spawnYtdlpDownload, videoFormat, type VideoProbe } from './ytdlp-engine'
 import { PRIORITIZE_TAIL, ariaSize, prioritizePieceOption } from './stream-priority'
 import { compatCommand, parseFfmpegProgress, parseMediaInfo, parseProbeJson, planCompatPlayback, probeCommand, type CompatMode, type MediaStreams } from './media-transcode'
+import { parseStereoFromProbe, probeStereoFromContainer } from './stereo-detect'
+import type { StereoMode } from '../src/services/stereo3d'
 import { parseByteRange } from './http-range'
 import { buildBtTrackers, splitTrackers } from './tracker-merge'
 import { decideMetadataPhase } from './metadata-wait'
@@ -1186,6 +1188,19 @@ class TorrentEngine {
     }
     const { stderr } = await runCapture(ffmpeg, ['-hide_banner', '-i', input])
     return parseMediaInfo(stderr)
+  }
+
+  // 容器立体元数据探测（文件名提示的补充）：渲染层在立体关闭时调用，自动预选 VR180/SBS/TB；
+  // 部分下载的文件探测可能失败，一律返回 null 由调用方保持现状
+  async detectStereo(infoHash: string, filePath: string): Promise<StereoMode | null> {
+    try {
+      const file = this.findMediaFile(infoHash, filePath)
+      const ffmpeg = await this.resolveFfmpeg()
+      if (!ffmpeg) return null
+      const ffprobe = join(dirname(ffmpeg), process.platform === 'win32' ? 'ffprobe.exe' : 'ffprobe')
+      if (!existsSync(ffprobe)) return null
+      return await probeStereoFromContainer(ffprobe, file.path)
+    } catch { return null }
   }
 
   private findMediaFile(infoHash: string, filePath: string) {

@@ -930,6 +930,12 @@ function setupIPC() {
     }
   })
 
+  // 容器立体元数据探测：渲染层在立体关闭时调用（文件名提示的补充）
+  ipcMain.handle('stereo:probe', async (_event, infoHash: string, filePath: string) => {
+    try { return { success: true, data: await torrentEngine.detectStereo(String(infoHash ?? ''), String(filePath ?? '')) } }
+    catch (error) { return { success: false, error: getErrorMessage(error) } }
+  })
+
   // 任务历史：完成任务 / 被移除任务的留档查询与清空
   ipcMain.handle('task-history:list', () => ({ success: true, data: listTaskHistory() }))
   ipcMain.handle('task-history:clear', () => {

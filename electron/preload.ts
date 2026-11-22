@@ -80,6 +80,7 @@ const electronAPI: ElectronAPI = {
   taskHistoryClear: () => ipcRenderer.invoke('task-history:clear'),
   ratingsGet: () => ipcRenderer.invoke('ratings:get'),
   ratingsSet: (key: string, stars: number) => ipcRenderer.invoke('ratings:set', key, stars),
+  stereoProbe: (infoHash: string, filePath: string) => ipcRenderer.invoke('stereo:probe', infoHash, filePath),
   mediaCollectionCreate: (name: string) => ipcRenderer.invoke('media-collections:create', name),
   mediaCollectionRename: (id: string, name: string) => ipcRenderer.invoke('media-collections:rename', id, name),
   mediaCollectionRemove: (id: string) => ipcRenderer.invoke('media-collections:remove', id),
