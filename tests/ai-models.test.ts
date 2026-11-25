@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { join } from 'node:path'
 import { AI_MODELS, digestMatches, resolveAiAsset } from '../electron/ai-models'
 
 // 模块顶层引入了 electron（app/net），被测的纯函数不会触达它
@@ -7,11 +8,12 @@ vi.mock('electron', () => ({ net: {}, app: { getPath: () => '/tmp', isPackaged: 
 const roots = { mediapipe: '/app/mp', ort: '/app/ort', models: '/data/models' }
 
 describe('resolveAiAsset', () => {
+  // 路径分隔符随平台变化（Windows 为反斜杠），期望值统一用 join 生成
   it('只放行固定根目录下的单个文件名', () => {
-    expect(resolveAiAsset('wasm', 'vision_wasm_internal.js', roots)).toBe('/app/mp/vision_wasm_internal.js')
-    expect(resolveAiAsset('ort', 'ort-wasm-simd-threaded.wasm', roots)).toBe('/app/ort/ort-wasm-simd-threaded.wasm')
-    expect(resolveAiAsset('models', AI_MODELS.sface.file, roots)).toBe(`/data/models/${AI_MODELS.sface.file}`)
-    expect(resolveAiAsset('models', AI_MODELS.face.file, roots)).toBe(`/data/models/${AI_MODELS.face.file}`)
+    expect(resolveAiAsset('wasm', 'vision_wasm_internal.js', roots)).toBe(join('/app/mp', 'vision_wasm_internal.js'))
+    expect(resolveAiAsset('ort', 'ort-wasm-simd-threaded.wasm', roots)).toBe(join('/app/ort', 'ort-wasm-simd-threaded.wasm'))
+    expect(resolveAiAsset('models', AI_MODELS.sface.file, roots)).toBe(join('/data/models', AI_MODELS.sface.file))
+    expect(resolveAiAsset('models', AI_MODELS.face.file, roots)).toBe(join('/data/models', AI_MODELS.face.file))
   })
 
   it('拒绝路径穿越、未知模型与未知目录', () => {

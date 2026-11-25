@@ -16,13 +16,13 @@ BTViewer is an Electron + React desktop downloader and media player. It supports
 
 ## Features
 
-- Parse magnets and `.torrent` files; save tasks, stream while downloading, or download selected files
-- HTTP(S) / FTP direct downloads, Metalink, and yt-dlp-powered HLS and video sites
-- Local media import, custom collections, search, filters and sorting in the media library
-- Built-in player with resume playback, cross-task playlists, subtitles and compatibility playback
+- Parse magnets and `.torrent` files; save tasks, stream while downloading, or download selected files (aria2c)
+- HTTP(S) / FTP direct downloads, Metalink, and HLS and video sites (yt-dlp)
+- Local media import (ffmpeg probing), custom collections, search, filters and sorting in the media library
+- Built-in player with resume playback, cross-task playlists, subtitles and compatibility playback (Video.js, ffmpeg transcoding)
 - Optional AI features (models downloaded on demand; everything runs locally):
-  - **Gesture control**: camera-based hand gestures on the player page — open palm to play/pause, swipe the index finger to seek, fist to mute
-  - **People collections**: analyses downloaded videos in the background, groups people by face similarity, supports naming, merging, splitting and filtering by person
+  - **Gesture control** (MediaPipe HandLandmarker): camera-based hand gestures on the player page — open palm to play/pause, swipe the index finger to seek, fist to mute
+  - **People collections** (MediaPipe FaceLandmarker + SFace / ONNX Runtime Web): analyses downloaded videos in the background, groups people by face similarity, supports naming, merging, splitting and filtering by person
 - Batch task controls, speed limits, tracker settings and post-download actions
 - Simplified Chinese / English UI; Windows, Linux and macOS support
 

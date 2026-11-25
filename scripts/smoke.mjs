@@ -166,8 +166,8 @@ async function main() {
     check('下载文件落盘且大小正确', size === 1024 * 1024, `${size} 字节`)
 
     // 4) 界面确实渲染出该任务，并显示「已完成」
-    //    注意：下满的任务会被归到「已完成」分组，所以要先切页再切分组
-    await client.evaluate(`document.querySelectorAll('.nav-item')[2]?.click()`)
+    //    下载任务已收进右下角浮层（.downloads-fab），不再是导航页；下满的任务归到「已完成」分组（tab 下标 1）
+    await client.evaluate(`document.querySelector('.downloads-fab')?.click()`)
     await sleep(400)
     await client.evaluate(`document.querySelectorAll('.task-tabs button')[1]?.click()`)
     await sleep(400)
