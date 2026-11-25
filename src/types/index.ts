@@ -1,3 +1,7 @@
+// 可选 AI 模型：hand = 手势识别（MediaPipe HandLandmarker）；face = 人脸关键点（MediaPipe FaceLandmarker）；sface = 人脸识别特征（ONNX）
+export type AiModelId = 'hand' | 'face' | 'sface'
+export type AiModelStatus = Record<AiModelId, { installed: boolean; bytes: number }>
+
 export interface TorrentFileInfo {
   name: string
   path: string
@@ -107,6 +111,7 @@ export interface SmartCollectionRules {
   watchState?: 'unfinished'           // 未看完（0 < 进度 < 95%）
   minRating?: number                  // 评分下限（1-5）
   addedWithinDays?: number            // 最近 N 天内添加
+  personId?: string                   // 包含某个人物（人物合集的 ID）
 }
 
 export interface SmartCollection {
@@ -253,6 +258,10 @@ export interface AppSettings {
   postAction?: PostAction
   // 监听剪贴板：复制到磁力/直链时在应用内提示一键添加（默认关闭，且不会自动开始下载）
   clipboardWatch?: boolean
+  // 手势控制（MediaPipe 可选功能）：播放页内用摄像头识别手势，默认关闭；开启前需下载模型
+  gestureEnabled?: boolean
+  // 人物合集（可选 AI 功能）：后台分析已下载完成的视频，默认关闭；开启前需下载人脸模型
+  peopleEnabled?: boolean
   // ── 网络与连通性（aria2 命令行选项，改动需重启下载引擎生效）
   // BT 监听端口；空则使用 aria2 默认范围（6881-6999）
   listenPort?: string

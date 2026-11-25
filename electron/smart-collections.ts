@@ -19,6 +19,7 @@ function isRules(value: unknown): value is SmartCollectionRules {
   if (rules.watchState !== undefined && rules.watchState !== 'unfinished') return false
   if (rules.minRating !== undefined && (typeof rules.minRating !== 'number' || rules.minRating < 1 || rules.minRating > 5)) return false
   if (rules.addedWithinDays !== undefined && (typeof rules.addedWithinDays !== 'number' || rules.addedWithinDays <= 0)) return false
+  if (rules.personId !== undefined && (typeof rules.personId !== 'string' || !rules.personId)) return false
   return true
 }
 

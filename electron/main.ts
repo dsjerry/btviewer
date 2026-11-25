@@ -1,5 +1,6 @@
-import { app, BrowserWindow, ipcMain, dialog, Menu, shell, nativeTheme, Tray, Notification, clipboard } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, Menu, shell, nativeTheme, Tray, Notification, clipboard, net, protocol } from 'electron'
 import { basename, join, resolve } from 'path'
+import { pathToFileURL } from 'url'
 import { spawn } from 'child_process'
 import { createWriteStream, existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
 import { randomUUID } from 'crypto'
@@ -20,10 +21,13 @@ import { createClipboardWatcher } from './clipboard-watch'
 import { formatSpeed } from '../src/services/task-meta'
 import { detectBinary, detectJsRuntime, clearDetectCache } from './ytdlp-engine'
 import { downloadYtDlp, downloadFfmpeg, downloadDeno, updateYtDlp, seedBundledMedia, installDir, installCapabilities } from './ytdlp-installer'
+import { aiModelStatus, aiModelsDir, aiRuntimeDir, downloadModel, removeModel, resolveAiAsset } from './ai-models'
+import { clearPeopleData, extractAnalysisFrame, mergePersonsInto, nextAnalysisJob, peopleFacesOf, peopleSummary, peopleVideoMap, removePersonsById, renamePersonById, splitPersonFaces, submitAnalysis } from './people-store'
 import { logger, listLogFiles, readLogTail } from './logger'
 import { buildDiagnostics } from './diagnostics'
 import { isNewerVersion, parseLatestRelease } from './update-check'
-import type { AppSettings, GlobalStat, LocalMediaEntry, MediaCollectionItem, TorrentStatus } from '../src/types'
+import type { AiModelId, AppSettings, GlobalStat, LocalMediaEntry, MediaCollectionItem, TorrentStatus } from '../src/types'
+import type { DetectedFaceDraft } from '../src/services/people'
 
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
@@ -723,6 +727,61 @@ function setupIPC() {
     }
   })
 
+  // 可选 AI 模型：渲染层在用户确认后才调用安装；下载与校验失败都以错误返回，不留残缺文件
+  ipcMain.handle('models:status', () => ({ success: true, data: aiModelStatus() }))
+  ipcMain.handle('models:install', async (_event, id: AiModelId) => {
+    try {
+      await downloadModel(id, (received, total) => {
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('models:install-progress', { received, total })
+      })
+      return { success: true, data: aiModelStatus() }
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) }
+    }
+  })
+  ipcMain.handle('models:remove', (_event, id: AiModelId) => {
+    removeModel(id)
+    return { success: true, data: aiModelStatus() }
+  })
+
+  // 人物合集：分析在渲染层后台进行，主进程负责候选挑选、抽帧与持久化；数据变化后通知页面刷新
+  const notifyPeopleChanged = () => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('people:changed') }
+  ipcMain.handle('people:summary', () => ({ success: true, data: peopleSummary() }))
+  ipcMain.handle('people:faces', (_event, personId: string) => ({ success: true, data: peopleFacesOf(String(personId)) }))
+  ipcMain.handle('people:video-map', () => ({ success: true, data: peopleVideoMap() }))
+  ipcMain.handle('people:next-job', async () => ({ success: true, data: await nextAnalysisJob() }))
+  ipcMain.handle('people:frame', async (_event, path: string, t: number) => ({ success: true, data: await extractAnalysisFrame(String(path), Number(t)) }))
+  ipcMain.handle('people:submit', (_event, key: string, duration: number, drafts: DetectedFaceDraft[]) => {
+    submitAnalysis(String(key), Number(duration), Array.isArray(drafts) ? drafts : [])
+    notifyPeopleChanged()
+    return { success: true }
+  })
+  ipcMain.handle('people:rename', (_event, personId: string, name: string) => {
+    renamePersonById(String(personId), String(name ?? ''))
+    notifyPeopleChanged()
+    return { success: true }
+  })
+  ipcMain.handle('people:merge', (_event, fromIds: string[], toId: string) => {
+    mergePersonsInto((Array.isArray(fromIds) ? fromIds : []).map(String), String(toId))
+    notifyPeopleChanged()
+    return { success: true }
+  })
+  ipcMain.handle('people:split', (_event, faceIds: string[]) => {
+    const personId = splitPersonFaces((Array.isArray(faceIds) ? faceIds : []).map(String))
+    notifyPeopleChanged()
+    return { success: true, data: personId }
+  })
+  ipcMain.handle('people:remove', (_event, personIds: string[]) => {
+    removePersonsById((Array.isArray(personIds) ? personIds : []).map(String))
+    notifyPeopleChanged()
+    return { success: true }
+  })
+  ipcMain.handle('people:clear', () => {
+    clearPeopleData()
+    notifyPeopleChanged()
+    return { success: true }
+  })
+
   ipcMain.handle('torrent:get-stream-url', async (_event, infoHash: string, filePath: string) => {
     return torrentEngine.getStreamUrl(infoHash, filePath)
   })
@@ -1074,6 +1133,9 @@ function applyMagnetRegistration(enabled: boolean) {
   } catch (error) { logger.warn('launch', `磁力协议注册失败：${getErrorMessage(error)}`) }
 }
 
+// ai:// 供渲染层加载 WASM 运行时与模型（打包态 file:// 无法被 fetch）；需在 app ready 前注册为特权协议
+protocol.registerSchemesAsPrivileged([{ scheme: 'ai', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } }])
+
 app.whenReady().then(async () => {
   // 命令行诊断输出：打印到 stdout 后退出，不起窗口也不起 aria2（支持让用户直接发回这份文本）
   if (isDiagnosticsRun) {
@@ -1085,6 +1147,11 @@ app.whenReady().then(async () => {
   // 没抢到单实例锁的进程直接退出，不做任何启动工作（不起 aria2、不建窗口）
   if (!hasSingleInstanceLock) return
   setupAppMenu()
+  protocol.handle('ai', (request) => {
+    const url = new URL(request.url)
+    const file = resolveAiAsset(url.hostname, decodeURIComponent(url.pathname.slice(1)), { mediapipe: aiRuntimeDir('mediapipe'), ort: aiRuntimeDir('ort'), models: aiModelsDir() })
+    return file && existsSync(file) ? net.fetch(pathToFileURL(file).toString()) : new Response('Not Found', { status: 404 })
+  })
   // Windows 通知需要与打包配置一致的 AppUserModelID
   app.setAppUserModelId('com.btviewer.app')
   logger.cleanup()

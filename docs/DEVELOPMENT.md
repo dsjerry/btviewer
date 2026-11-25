@@ -15,6 +15,17 @@ Electron main process ── aria2c（BT / HTTP / FTP / Metalink）
 
 主进程负责下载引擎、持久化和媒体流；renderer 只负责界面，通过 preload 暴露的 IPC 与主进程通信。
 
+可选 AI 功能的分工：
+
+```text
+renderer：MediaPipe（手势 HandLandmarker / 人脸 FaceLandmarker）+ ONNX Runtime Web（SFace）
+        ↑ ai:// 协议读取 WASM 与模型        ↓ IPC 提交结果
+主进程：ai-models（下载、SHA256 校验）、people-store（people.json）、ffmpeg 抽帧与探测时长
+```
+
+- 手势控制详见 [手势识别](./gesture-control.md)
+- 人物合集详见 [人物合集：人脸分析](./face-analysis.md)
+
 ## 环境要求
 
 - Node.js 20+，推荐 22+；npm
@@ -45,9 +56,9 @@ FFMPEG_PATH=/absolute/path/to/ffmpeg npm run dev
 
 ## 目录结构
 
-- `electron/`：主进程、下载引擎、IPC、媒体流与持久化
-- `src/components/`：首页（影院化媒体库）、下载浮层（DownloadsPanel）、播放器和设置
-- `src/services/`：renderer 服务、播放列表与 IPC 类型
+- `electron/`：主进程、下载引擎、IPC、媒体流与持久化；`ai-models.ts` 管理可选模型，`people-store.ts` 管理人物数据与抽帧
+- `src/components/`：首页（影院化媒体库）、人物页（PeoplePage）、下载浮层（DownloadsPanel）、播放器和设置
+- `src/services/`：renderer 服务、播放列表与 IPC 类型；`gesture.ts` / `hand-tracker.ts` 为手势，`face-*.ts` / `people*.ts` 为人物合集
 - `tests/`：Vitest 单元测试
 - `resources/`：应用图标、aria2c 与媒体工具
 - `scripts/`：开发启动器、图标生成与冒烟测试

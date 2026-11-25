@@ -20,6 +20,9 @@ BTViewer 是一款基于 Electron + React 的桌面下载与媒体播放应用�
 - 支持 HTTP(S) / FTP 直链、Metalink，以及通过 yt-dlp 处理的 HLS 和视频站点
 - 媒体库支持本地媒体导入、自定义合集、搜索、筛选与排序
 - 内置播放器支持续播、跨任务播放列表、字幕及兼容播放
+- 可选 AI 功能（模型按需下载，全部在本机处理）：
+  - **手势控制**：播放页内用摄像头识别手势，张掌播放/暂停、食指挥动快进快退、握拳静音
+  - **人物合集**：后台分析已下载完成的视频，按人脸相似度自动归组人物，支持命名、合并、拆分与按人物筛选
 - 批量任务控制、限速、Tracker 设置和下载完成动作
 - 简体中文 / English 界面，支持 Windows、Linux 和 macOS
 
@@ -41,6 +44,8 @@ BT 与直链下载不需要 yt-dlp。视频站点和 HLS 的可选依赖可在�
 - [安装与打包](./docs/INSTALLATION.md)
 - [开发、测试与项目结构](./docs/DEVELOPMENT.md)
 - [视频站点与 YouTube 画质](./docs/video-sites.md)
+- [人物合集：人脸分析](./docs/face-analysis.md)
+- [手势识别](./docs/gesture-control.md)
 - [文件关联与外部打开](./docs/file-associations.md)
 - [测试指南与示例磁力](./docs/TESTING.md)
 - [常见问题](./docs/TROUBLESHOOTING.md)

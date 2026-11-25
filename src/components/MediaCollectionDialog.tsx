@@ -3,6 +3,7 @@
 import React, { useEffect, useState } from 'react'
 import { t } from '../services/i18n'
 import { hasSmartRule } from '../services/smart-collections'
+import type { PersonSummary } from '../services/people'
 import type { SmartCollectionRules } from '../types'
 
 interface Props {
@@ -10,13 +11,14 @@ interface Props {
   name?: string
   rules?: SmartCollectionRules
   error?: string
+  people?: PersonSummary[]
   onSave: (value: string, rules?: SmartCollectionRules) => Promise<boolean>
   onClose: () => void
 }
 
 const isSmartMode = (mode: Props['mode']) => mode === 'smart-create' || mode === 'smart-rename'
 
-export const MediaCollectionDialog: React.FC<Props> = ({ mode, name = '', rules = {}, error, onSave, onClose }) => {
+export const MediaCollectionDialog: React.FC<Props> = ({ mode, name = '', rules = {}, error, people = [], onSave, onClose }) => {
   const [value, setValue] = useState(name)
   const [ruleState, setRuleState] = useState<SmartCollectionRules>(rules)
   const [saving, setSaving] = useState(false)
@@ -83,6 +85,15 @@ export const MediaCollectionDialog: React.FC<Props> = ({ mode, name = '', rules 
                 <option value="30">30 {t('library.ruleDays')}</option>
               </select>
             </div>
+            {people.length > 0 && (
+              <div className="collection-rule-row">
+                <span>{t('library.rulePerson')}</span>
+                <select value={ruleState.personId ?? ''} onChange={(event) => setRule('personId', event.target.value || undefined)}>
+                  <option value="">{t('library.ruleAny')}</option>
+                  {people.map((person) => <option key={person.id} value={person.id}>{person.name || t('people.unnamed')}</option>)}
+                </select>
+              </div>
+            )}
             <p className="collection-rule-hint">{t('library.smartHint')}</p>
           </>
         )}

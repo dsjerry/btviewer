@@ -15,6 +15,17 @@ Local HTTP Range media stream → Video.js
 
 The main process owns the download engine, persistence and media streaming. The renderer handles the UI and communicates through IPC exposed by the preload script.
 
+Optional AI features are split the same way:
+
+```text
+Renderer: MediaPipe (HandLandmarker for gestures, FaceLandmarker for faces) + ONNX Runtime Web (SFace)
+        ↑ reads WASM and models via the ai:// protocol    ↓ submits results over IPC
+Main process: ai-models (download, SHA256 check), people-store (people.json), ffmpeg frame extraction and duration probing
+```
+
+- Gesture control: see [Gesture control](./gesture-control.en.md)
+- People collections: see [People collections: face analysis](./face-analysis.en.md)
+
 ## Requirements
 
 - Node.js 20+ (22+ recommended) and npm
@@ -45,9 +56,9 @@ FFMPEG_PATH=/absolute/path/to/ffmpeg npm run dev
 
 ## Project layout
 
-- `electron/`: main process, download engine, IPC, media streaming and persistence
-- `src/components/`: Home (cinema-style library), Downloads overlay (DownloadsPanel), Player and Settings
-- `src/services/`: renderer services, playlists and IPC types
+- `electron/`: main process, download engine, IPC, media streaming and persistence; `ai-models.ts` manages optional models, `people-store.ts` manages people data and frame extraction
+- `src/components/`: Home (cinema-style library), People page (PeoplePage), Downloads overlay (DownloadsPanel), Player and Settings
+- `src/services/`: renderer services, playlists and IPC types; `gesture.ts` / `hand-tracker.ts` for gestures, `face-*.ts` / `people*.ts` for people collections
 - `tests/`: Vitest unit tests
 - `resources/`: app icons, aria2c and media tools
 - `scripts/`: dev launcher, icon generation and smoke test

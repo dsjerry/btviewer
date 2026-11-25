@@ -3,12 +3,14 @@ import AppIcon from './AppIcon'
 import { ipc } from '../services/ipc'
 import type { InstallCapabilities, LogEntry, LogFileInfo } from '../services/ipc'
 import { t } from '../services/i18n'
+import { ConfirmDialog } from './ConfirmDialog'
 import pkg from '../../package.json'
 import { fieldPatch, requiresEngineRestart, validateField, type EditableField } from '../services/settings-fields'
 import { POST_ACTION_LABELS } from '../../electron/post-action'
-import type { AppSettings, EngineNetworkStatus, Language, PostAction, ThemeMode } from '../types'
+import type { AiModelId, AiModelStatus, AppSettings, EngineNetworkStatus, Language, PostAction, ThemeMode } from '../types'
+import { startPeopleAnalysis, stopPeopleAnalysis } from '../services/people-runtime'
 
-interface SettingsState { capabilities?: { closeToTray: boolean; launchOnStartup: boolean }; downloadDir: string; trackers: string; maxConcurrentDownloads: number; speedLimit: string; httpSplit: number; ytdlpPath: string; ytdlpBrowser: string; proxy: string; logDir: string; closeToTray?: boolean; launchOnStartup?: boolean; notifyOnComplete?: boolean; registerMagnet?: boolean; clipboardWatch?: boolean; postAction: PostAction; listenPort: string; enableDht: boolean; enablePex: boolean; enableLpd: boolean; btEncryption: 'auto' | 'require'; seedMode: 'off' | 'ratio' | 'time'; seedRatio: number; seedMinutes: number; streamPriority: boolean; autoRetry: boolean; maxRetries: number }
+interface SettingsState { capabilities?: { closeToTray: boolean; launchOnStartup: boolean }; downloadDir: string; trackers: string; maxConcurrentDownloads: number; speedLimit: string; httpSplit: number; ytdlpPath: string; ytdlpBrowser: string; proxy: string; logDir: string; closeToTray?: boolean; launchOnStartup?: boolean; notifyOnComplete?: boolean; registerMagnet?: boolean; clipboardWatch?: boolean; gestureEnabled: boolean; peopleEnabled: boolean; postAction: PostAction; listenPort: string; enableDht: boolean; enablePex: boolean; enableLpd: boolean; btEncryption: 'auto' | 'require'; seedMode: 'off' | 'ratio' | 'time'; seedRatio: number; seedMinutes: number; streamPriority: boolean; autoRetry: boolean; maxRetries: number }
 
 // 主进程返回的设置 → 组件状态（缺省值集中在一处，避免加载/保存两条路径漂移）
 function toState(data: AppSettings, fallback: { logDir: string }): SettingsState {
@@ -28,6 +30,8 @@ function toState(data: AppSettings, fallback: { logDir: string }): SettingsState
     notifyOnComplete: data.notifyOnComplete,
     registerMagnet: data.registerMagnet === true,
     clipboardWatch: data.clipboardWatch === true,
+    gestureEnabled: data.gestureEnabled === true,
+    peopleEnabled: data.peopleEnabled === true,
     postAction: data.postAction && data.postAction in POST_ACTION_LABELS ? data.postAction : 'none',
     listenPort: data.listenPort || '',
     enableDht: data.enableDht !== false,
@@ -80,6 +84,10 @@ const Settings: React.FC<{ theme: ThemeMode; onThemeChange: (mode: ThemeMode) =>
   const [ffmpegProgress, setFfmpegProgress] = useState<{ received: number; total: number } | null>(null)
   // deno（JS 运行时）自动安装进度
   const [denoProgress, setDenoProgress] = useState<{ received: number; total: number } | null>(null)
+  // MediaPipe 可选模型：安装状态、下载进度，以及待确认的操作（开启手势需先下载模型 / 删除模型）
+  const [aiModels, setAiModels] = useState<AiModelStatus | null>(null)
+  const [aiProgress, setAiProgress] = useState<{ received: number; total: number } | null>(null)
+  const [aiPrompt, setAiPrompt] = useState<'enable-gesture' | 'remove-gesture-model' | 'enable-people' | 'clear-people' | null>(null)
   // 下载引擎网络状态（监听端口 / 是否需要重启生效）
   const [network, setNetwork] = useState<EngineNetworkStatus | null>(null)
   const [restarting, setRestarting] = useState(false)
@@ -93,6 +101,8 @@ const Settings: React.FC<{ theme: ThemeMode; onThemeChange: (mode: ThemeMode) =>
   useEffect(() => { try { return ipc.onYtdlpInstallProgress((progress) => setInstallProgress(progress)) } catch { return () => undefined } }, [])
   useEffect(() => { try { return ipc.onFfmpegInstallProgress((progress) => setFfmpegProgress(progress)) } catch { return () => undefined } }, [])
   useEffect(() => { try { return ipc.onDenoInstallProgress((progress) => setDenoProgress(progress)) } catch { return () => undefined } }, [])
+  useEffect(() => { try { return ipc.onAiModelInstallProgress((progress) => setAiProgress(progress)) } catch { return () => undefined } }, [])
+  useEffect(() => { void ipc.aiModelStatus().then((result) => { if (result.success && result.data) setAiModels(result.data) }).catch(() => undefined) }, [])
 
   const checkYtdlp = async (path?: string) => {
     setYtdlpState({ checking: true })
@@ -101,6 +111,54 @@ const Settings: React.FC<{ theme: ThemeMode; onThemeChange: (mode: ThemeMode) =>
       if (result.success && result.data) setYtdlpState({ checking: false, available: result.data.available, ffmpeg: result.data.ffmpegAvailable, jsRuntime: result.data.jsRuntime, path: result.data.path, capabilities: result.data.capabilities })
       else setYtdlpState({ checking: false, available: false })
     } catch { setYtdlpState({ checking: false, available: false }) }
+  }
+
+  // 可选 AI 模型按顺序下载，已存在的会被跳过；任一失败即停止并提示
+  const downloadModels = async (ids: AiModelId[]) => {
+    setAiProgress({ received: 0, total: 0 })
+    try {
+      for (const id of ids) {
+        const result = await ipc.installAiModel(id)
+        if (!result.success || !result.data) { setNotice({ type: 'error', text: result.error || t('settings.installFailed') }); return false }
+        setAiModels(result.data)
+      }
+      return true
+    } catch (error) { setNotice({ type: 'error', text: error instanceof Error ? error.message : t('settings.installFailed') }); return false } finally { setAiProgress(null) }
+  }
+  // 手势控制开关：模型缺失时先弹确认框，确认后下载并开启；关闭或模型已在时直接保存
+  const toggleGesture = (enabled: boolean) => {
+    if (enabled && !aiModels?.hand.installed) setAiPrompt('enable-gesture')
+    else void saveOption({ gestureEnabled: enabled })
+  }
+  const confirmEnableGesture = async () => {
+    setAiPrompt(null)
+    if (await downloadModels(['hand'])) await saveOption({ gestureEnabled: true })
+  }
+  const confirmRemoveGestureModel = async () => {
+    setAiPrompt(null)
+    await saveOption({ gestureEnabled: false })
+    const result = await ipc.removeAiModel('hand').catch(() => null)
+    if (result?.success && result.data) setAiModels(result.data)
+  }
+  // 人物合集：需要人脸关键点（FaceLandmarker）与识别（SFace）两个模型；关闭即停止后台分析
+  const enablePeople = async () => {
+    await saveOption({ peopleEnabled: true })
+    startPeopleAnalysis()
+  }
+  const togglePeople = (enabled: boolean) => {
+    if (!enabled) { stopPeopleAnalysis(); void saveOption({ peopleEnabled: false }); return }
+    if (aiModels?.face.installed && aiModels.sface.installed) void enablePeople()
+    else setAiPrompt('enable-people')
+  }
+  const confirmEnablePeople = async () => {
+    setAiPrompt(null)
+    if (await downloadModels(['face', 'sface'])) await enablePeople()
+  }
+  const confirmClearPeople = async () => {
+    setAiPrompt(null)
+    stopPeopleAnalysis()
+    await ipc.peopleClear().catch(() => null)
+    await saveOption({ peopleEnabled: false })
   }
 
   const installYtdlp = async () => {
@@ -404,6 +462,40 @@ const Settings: React.FC<{ theme: ThemeMode; onThemeChange: (mode: ThemeMode) =>
               <input type="number" min={1} max={16} value={fieldValue('httpSplit')} onChange={(event) => changeField('httpSplit', event.target.value)} onBlur={() => void commitField('httpSplit')} />
             </div>
           </div>
+          <div className="settings-card">
+            <h3>{t('settings.mediapipe')}</h3>
+            <p>{t('settings.mediapipeHint')}</p>
+            <div className="settings-check-group">
+              <label className="settings-check"><input type="checkbox" checked={state.gestureEnabled} disabled={!!aiProgress} onChange={(event) => toggleGesture(event.target.checked)} />{t('settings.gestureControl')}</label>
+            </div>
+            <div className="settings-row">
+              <small>{aiModels?.hand.installed ? t('settings.modelInstalled') : t('settings.modelMissing')}</small>
+              {aiModels?.hand.installed && <button className="small-button" onClick={() => setAiPrompt('remove-gesture-model')} disabled={!!aiProgress}>{t('settings.removeModel')}</button>}
+            </div>
+            <p>{t('settings.gestureHint')}</p>
+          </div>
+          <div className="settings-card">
+            <h3>{t('settings.people')}</h3>
+            <p>{t('settings.peopleHint')}</p>
+            <div className="settings-check-group">
+              <label className="settings-check"><input type="checkbox" checked={state.peopleEnabled} disabled={!!aiProgress} onChange={(event) => togglePeople(event.target.checked)} />{t('settings.peopleEnable')}</label>
+            </div>
+            <div className="settings-row">
+              <small>{aiModels?.face.installed && aiModels.sface.installed ? t('settings.peopleModelsInstalled') : t('settings.peopleModelsMissing')}</small>
+              <button className="small-button" onClick={() => setAiPrompt('clear-people')} disabled={!!aiProgress}>{t('settings.peopleClear')}</button>
+            </div>
+            <p>{t('settings.peopleNote')}</p>
+          </div>
+          {aiProgress && (
+            <div className="install-progress">
+              <span className="bar"><span style={{ width: `${aiProgress.total ? Math.min(100, (aiProgress.received / aiProgress.total) * 100) : 8}%` }} /></span>
+              <small>{(aiProgress.received / 1024 / 1024).toFixed(1)} MB{aiProgress.total ? ` / ${(aiProgress.total / 1024 / 1024).toFixed(1)} MB` : ''}</small>
+            </div>
+          )}
+          <ConfirmDialog open={aiPrompt === 'enable-gesture'} message={t('settings.modelPrompt')} confirmText={t('settings.downloadEnable')} danger={false} onConfirm={() => void confirmEnableGesture()} onCancel={() => setAiPrompt(null)} />
+          <ConfirmDialog open={aiPrompt === 'remove-gesture-model'} message={t('settings.modelRemovePrompt')} confirmText={t('settings.removeModel')} onConfirm={() => void confirmRemoveGestureModel()} onCancel={() => setAiPrompt(null)} />
+          <ConfirmDialog open={aiPrompt === 'enable-people'} message={t('settings.peoplePrompt')} confirmText={t('settings.downloadEnable')} danger={false} onConfirm={() => void confirmEnablePeople()} onCancel={() => setAiPrompt(null)} />
+          <ConfirmDialog open={aiPrompt === 'clear-people'} message={t('settings.peopleClearPrompt')} confirmText={t('settings.peopleClear')} onConfirm={() => void confirmClearPeople()} onCancel={() => setAiPrompt(null)} />
           <div className="settings-card settings-card-tooltip">
             <h3>{t('settings.ytdlp')}</h3>
             <p>{t('settings.ytdlpHint')}</p>

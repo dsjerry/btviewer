@@ -10,9 +10,11 @@ interface Props {
   confirmText?: string
   onConfirm: (checked: boolean) => void
   onCancel: () => void
+  // 确认键是否为红色（破坏性操作）；缺省为红色，非破坏性操作（如下载）传 false
+  danger?: boolean
 }
 
-export const ConfirmDialog: React.FC<Props> = ({ open, message, checkboxLabel, confirmText, onConfirm, onCancel }) => {
+export const ConfirmDialog: React.FC<Props> = ({ open, message, checkboxLabel, confirmText, onConfirm, onCancel, danger = true }) => {
   const [checked, setChecked] = useState(false)
   const confirmRef = useRef<HTMLButtonElement>(null)
   useEffect(() => { if (open) { setChecked(false); confirmRef.current?.focus() } }, [open])
@@ -30,7 +32,7 @@ export const ConfirmDialog: React.FC<Props> = ({ open, message, checkboxLabel, c
         {checkboxLabel && <label className="confirm-checkbox"><input type="checkbox" checked={checked} onChange={(e) => setChecked(e.target.checked)} />{checkboxLabel}</label>}
         <div className="confirm-actions">
           <button className="small-button" onClick={onCancel}>{t('confirm.cancel')}</button>
-          <button className="small-button danger" ref={confirmRef} onClick={() => onConfirm(checked)}>{confirmText || t('confirm.confirmRemove')}</button>
+          <button className={`small-button${danger ? ' danger' : ''}`} ref={confirmRef} onClick={() => onConfirm(checked)}>{confirmText || t('confirm.confirmRemove')}</button>
         </div>
       </div>
     </div>

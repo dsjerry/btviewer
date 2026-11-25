@@ -13,6 +13,8 @@ import { StereoGLRenderer, type StereoCamera } from '../services/stereo-gl'
 import { seriesKey } from '../services/episode'
 // 播放位置 → 字节偏移的换算与主进程共用同一实现（纯函数，无 Node 依赖）
 import { byteOffsetFor } from '../../electron/stream-priority'
+import type { GestureAction } from '../services/gesture'
+import { setPeopleAnalysisPaused } from '../services/people-runtime'
 import type { CompatAudioTrack, PlaylistEntry, SkipMarks, TorrentFileInfo } from '../types'
 
 type VjsPlayer = ReturnType<typeof videojs>
@@ -960,6 +962,50 @@ const Player: React.FC<PlayerProps> = ({ infoHash, file, subtitles, playlist, on
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [])
 
+  // 播放页内暂停人物合集的后台分析，避免与视频解码争抢 CPU
+  useEffect(() => { setPeopleAnalysisPaused(true); return () => setPeopleAnalysisPaused(false) }, [])
+
+  // 手势控制（MediaPipe 可选）：仅在播放页、且设置里开启时运行摄像头；离开播放页即释放
+  const [gestureActive, setGestureActive] = useState(false)
+  const gestureActionRef = useRef<(action: GestureAction) => void>(() => undefined)
+  gestureActionRef.current = (action) => {
+    const player = playerRef.current
+    if (!player || player.isDisposed()) return
+    const position = player.currentTime() ?? 0
+    const duration = player.duration() || Infinity
+    if (action === 'toggle-play') {
+      const resume = player.paused()
+      if (resume) void player.play()?.catch(() => undefined)
+      else player.pause()
+      pushToast(t(resume ? 'gesture.play' : 'gesture.pause'))
+    } else if (action === 'toggle-mute') {
+      const unmute = player.muted()
+      player.muted(!unmute)
+      pushToast(t(unmute ? 'gesture.unmute' : 'gesture.mute'))
+    } else {
+      const forward = action === 'seek-forward'
+      player.currentTime(forward ? Math.min(duration, position + 5) : Math.max(0, position - 5))
+      pushToast(t(forward ? 'gesture.forward' : 'gesture.backward'))
+    }
+  }
+  useEffect(() => {
+    let cancelled = false
+    let controller: { stop: () => void } | null = null
+    void (async () => {
+      const settings = await ipc.getSettings().catch(() => null)
+      if (cancelled || !settings?.success || !settings.data?.gestureEnabled) return
+      try {
+        const { startGestureControl } = await import('../services/hand-tracker')
+        const started = await startGestureControl((action) => gestureActionRef.current(action))
+        if (cancelled) started.stop()
+        else { controller = started; setGestureActive(true) }
+      } catch (error) {
+        if (!cancelled) pushToast(`${t('gesture.failed')}（${error instanceof Error ? error.message : String(error)}）`)
+      }
+    })()
+    return () => { cancelled = true; controller?.stop(); setGestureActive(false) }
+  }, [])
+
   // 多音轨（B6）：Chromium 不暴露 audioTracks，切轨只能走兼容转码——这里检测并在转码时指定保留哪条
   const [audioTracks, setAudioTracks] = useState<CompatAudioTrack[]>([])
   const [audioIndex, setAudioIndex] = useState(0)
@@ -982,7 +1028,7 @@ const Player: React.FC<PlayerProps> = ({ infoHash, file, subtitles, playlist, on
     } finally { setProbingAudio(false) }
   }
 
-  return <div className="player-page"><header className="player-header"><button className="back-link" onClick={onBack}>{t('player.back')}</button><div className="player-heading"><span className={`file-icon ${file.type}`}>{file.type === 'audio' ? '♫' : '▶'}</span><div><h2>{file.name}</h2><p>{file.type === 'audio' ? t('player.audioPlayback') : t('player.videoPlayback')}</p></div></div>{playlist.length > 1 && <div className="playlist-controls"><button className="playlist-button" disabled={currentIndex <= 0} onClick={() => playIndex(currentIndex - 1)} title={t('player.prevEpisode')}>⏮</button>{episodeTag && <span className="playlist-episode">{episodeLabel(episodeTag)}</span>}<span className="playlist-index">{currentIndex + 1} / {playlist.length}</span><button className="playlist-button" disabled={currentIndex < 0 || currentIndex >= playlist.length - 1} onClick={() => playIndex(currentIndex + 1)} title={nextEntry ? `下一集：${nextEntry.torrentName}${episodeLabel(parseEpisode(nextEntry.file.name)) ? ` · ${episodeLabel(parseEpisode(nextEntry.file.name))}` : ''}` : '下一集'}>⏭</button><button className={`playlist-button autoplay-toggle ${autoPlay ? 'is-on' : ''}`} onClick={toggleAutoPlay} title={t('player.autoplayTitle')}>{t('player.autoplay')}{autoPlay ? t('player.on') : t('player.off')}</button></div>}<button className={`playlist-button subtitle-trigger ${subtitleOpen || activeTrack >= 0 ? 'is-on' : ''}`} onClick={() => setSubtitleOpen((value) => !value)} title={t('player.subtitleTitle')}>{t('player.subtitle')}{activeTrack >= 0 ? ' ●' : ''}</button><button className={`playlist-button subtitle-trigger ${extrasOpen ? 'is-on' : ''}`} onClick={() => setExtrasOpen((value) => !value)} title={t('player.extrasTitle')}>{t('player.extras')}</button><button className="playlist-button compat-trigger" onClick={() => void startCompatPlayback()} disabled={compat.phase === 'preparing' || compat.phase === 'running'} title={t('player.compatTitle')}>⇄ 兼容播放</button>{extrasOpen && <div className="subtitle-panel extras-panel">
+  return <div className="player-page"><header className="player-header"><button className="back-link" onClick={onBack}>{t('player.back')}</button><div className="player-heading"><span className={`file-icon ${file.type}`}>{file.type === 'audio' ? '♫' : '▶'}</span><div><h2>{file.name}</h2><p>{file.type === 'audio' ? t('player.audioPlayback') : t('player.videoPlayback')}</p></div></div>{gestureActive && <span className="gesture-badge" title={t('player.gestureBadgeTitle')}>● {t('player.gestureBadge')}</span>}{playlist.length > 1 && <div className="playlist-controls"><button className="playlist-button" disabled={currentIndex <= 0} onClick={() => playIndex(currentIndex - 1)} title={t('player.prevEpisode')}>⏮</button>{episodeTag && <span className="playlist-episode">{episodeLabel(episodeTag)}</span>}<span className="playlist-index">{currentIndex + 1} / {playlist.length}</span><button className="playlist-button" disabled={currentIndex < 0 || currentIndex >= playlist.length - 1} onClick={() => playIndex(currentIndex + 1)} title={nextEntry ? `下一集：${nextEntry.torrentName}${episodeLabel(parseEpisode(nextEntry.file.name)) ? ` · ${episodeLabel(parseEpisode(nextEntry.file.name))}` : ''}` : '下一集'}>⏭</button><button className={`playlist-button autoplay-toggle ${autoPlay ? 'is-on' : ''}`} onClick={toggleAutoPlay} title={t('player.autoplayTitle')}>{t('player.autoplay')}{autoPlay ? t('player.on') : t('player.off')}</button></div>}<button className={`playlist-button subtitle-trigger ${subtitleOpen || activeTrack >= 0 ? 'is-on' : ''}`} onClick={() => setSubtitleOpen((value) => !value)} title={t('player.subtitleTitle')}>{t('player.subtitle')}{activeTrack >= 0 ? ' ●' : ''}</button><button className={`playlist-button subtitle-trigger ${extrasOpen ? 'is-on' : ''}`} onClick={() => setExtrasOpen((value) => !value)} title={t('player.extrasTitle')}>{t('player.extras')}</button><button className="playlist-button compat-trigger" onClick={() => void startCompatPlayback()} disabled={compat.phase === 'preparing' || compat.phase === 'running'} title={t('player.compatTitle')}>⇄ 兼容播放</button>{extrasOpen && <div className="subtitle-panel extras-panel">
   <div className="subtitle-panel-head"><span>{t('player.settings')}</span><button className="subtitle-close" onClick={() => setExtrasOpen(false)} aria-label={t('player.closeSettings')}>×</button></div>
   <div className="extras-section">
     <div className="extras-title">{t('player.marks')}<span className="extras-note">{t('player.marksNote')}</span></div>

@@ -1,5 +1,6 @@
-import type { AppSettings, BatchAddSummary, CompatPlanResult, CompatProgressEvent, CompatStartResult, EngineNetworkStatus, GlobalStat, IPCResult, LocalMediaEntry, MediaCollection, MediaCollectionItem, RatingEntry, SmartCollection, SmartCollectionRules, TaskHistoryEntry, TaskImportSummary, TaskPeer, TorrentFileInfo, TorrentStatus, WatchProgress } from '../types'
+import type { AppSettings, BatchAddSummary, CompatPlanResult, CompatProgressEvent, CompatStartResult, EngineNetworkStatus, GlobalStat, IPCResult, LocalMediaEntry, MediaCollection, MediaCollectionItem, AiModelId, AiModelStatus, RatingEntry, SmartCollection, SmartCollectionRules, TaskHistoryEntry, TaskImportSummary, TaskPeer, TorrentFileInfo, TorrentStatus, WatchProgress } from '../types'
 import type { StereoMode } from './stereo3d'
+import type { DetectedFaceDraft, FaceView, PersonSummary } from './people'
 
 // capabilities：该平台能否一键安装，决定设置页显示「安装」按钮还是面向普通用户的说明
 export interface InstallCapabilities { ytdlp: boolean; ffmpeg: boolean; deno: boolean }
@@ -23,6 +24,22 @@ export interface ElectronAPI {
   onYtdlpInstallProgress: (callback: (progress: { received: number; total: number }) => void) => () => void
   onFfmpegInstallProgress: (callback: (progress: { received: number; total: number }) => void) => () => void
   onDenoInstallProgress: (callback: (progress: { received: number; total: number }) => void) => () => void
+  aiModelStatus: () => Promise<IPCResult<AiModelStatus>>
+  installAiModel: (id: AiModelId) => Promise<IPCResult<AiModelStatus>>
+  removeAiModel: (id: AiModelId) => Promise<IPCResult<AiModelStatus>>
+  onAiModelInstallProgress: (callback: (progress: { received: number; total: number }) => void) => () => void
+  peopleSummary: () => Promise<IPCResult<{ people: PersonSummary[]; analyzed: number }>>
+  peopleFaces: (personId: string) => Promise<IPCResult<FaceView[]>>
+  peopleVideoMap: () => Promise<IPCResult<Record<string, string[]>>>
+  peopleNextJob: () => Promise<IPCResult<{ key: string; path: string; duration: number } | null>>
+  peopleFrame: (path: string, t: number) => Promise<IPCResult<Uint8Array | null>>
+  peopleSubmit: (key: string, duration: number, drafts: DetectedFaceDraft[]) => Promise<IPCResult>
+  peopleRename: (personId: string, name: string) => Promise<IPCResult>
+  peopleMerge: (fromIds: string[], toId: string) => Promise<IPCResult>
+  peopleSplit: (faceIds: string[]) => Promise<IPCResult<string>>
+  peopleRemove: (personIds: string[]) => Promise<IPCResult>
+  peopleClear: () => Promise<IPCResult>
+  onPeopleChanged: (callback: () => void) => () => void
   removeTorrent: (infoHash: string, destroy?: boolean) => Promise<IPCResult>
   pauseTorrent: (infoHash: string) => Promise<IPCResult>
   resumeTorrent: (infoHash: string) => Promise<IPCResult>
@@ -138,6 +155,22 @@ export const ipc: ElectronAPI = {
   onYtdlpInstallProgress: (callback) => getElectronAPI().onYtdlpInstallProgress(callback),
   onFfmpegInstallProgress: (callback) => getElectronAPI().onFfmpegInstallProgress(callback),
   onDenoInstallProgress: (callback) => getElectronAPI().onDenoInstallProgress(callback),
+  aiModelStatus: () => getElectronAPI().aiModelStatus(),
+  installAiModel: (id) => getElectronAPI().installAiModel(id),
+  removeAiModel: (id) => getElectronAPI().removeAiModel(id),
+  onAiModelInstallProgress: (callback) => getElectronAPI().onAiModelInstallProgress(callback),
+  peopleSummary: () => getElectronAPI().peopleSummary(),
+  peopleFaces: (personId) => getElectronAPI().peopleFaces(personId),
+  peopleVideoMap: () => getElectronAPI().peopleVideoMap(),
+  peopleNextJob: () => getElectronAPI().peopleNextJob(),
+  peopleFrame: (path, t) => getElectronAPI().peopleFrame(path, t),
+  peopleSubmit: (key, duration, drafts) => getElectronAPI().peopleSubmit(key, duration, drafts),
+  peopleRename: (personId, name) => getElectronAPI().peopleRename(personId, name),
+  peopleMerge: (fromIds, toId) => getElectronAPI().peopleMerge(fromIds, toId),
+  peopleSplit: (faceIds) => getElectronAPI().peopleSplit(faceIds),
+  peopleRemove: (personIds) => getElectronAPI().peopleRemove(personIds),
+  peopleClear: () => getElectronAPI().peopleClear(),
+  onPeopleChanged: (callback) => getElectronAPI().onPeopleChanged(callback),
   removeTorrent: (infoHash, destroy) => getElectronAPI().removeTorrent(infoHash, destroy),
   pauseTorrent: (infoHash) => getElectronAPI().pauseTorrent(infoHash),
   resumeTorrent: (infoHash) => getElectronAPI().resumeTorrent(infoHash),

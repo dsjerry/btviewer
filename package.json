@@ -27,7 +27,9 @@
     "release": "npm run verify && npm run build && electron-builder --publish always"
   },
   "dependencies": {
+    "@mediapipe/tasks-vision": "1.2.3",
     "fast-xml-parser": "^5.11.1",
+    "onnxruntime-web": "1.31.1",
     "video.js": "^8.24.0"
   },
   "devDependencies": {

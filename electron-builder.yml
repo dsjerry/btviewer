@@ -20,6 +20,16 @@ extraResources:
     to: media/${os}-${arch}
     filter:
       - "**/*"
+  # AI 运行时（MediaPipe / ONNX Runtime 的 WASM）：由 ai:// 协议加载，随包分发以保证离线可用；识别模型按需下载，不打包
+  - from: node_modules/@mediapipe/tasks-vision/wasm
+    to: runtime/mediapipe
+    filter:
+      - "**/*"
+  - from: node_modules/onnxruntime-web/dist
+    to: runtime/ort
+    filter:
+      - "ort-wasm-simd-threaded.wasm"
+      - "ort-wasm-simd-threaded.mjs"
   - from: resources/icon.png
     to: icon.png
 # 文件关联与协议注册在安装期完成（比运行期写注册表可靠）：
@@ -81,9 +91,13 @@ mac:
   # 不写死 identity，让 builder 按 CSC_LINK 自动识别证书名；未签名/未公证的包 Gatekeeper 会拦，
   # 且 macOS 10.13+ 的开机自启（SMAppService）也要求已签名并位于 /Applications。
   hardenedRuntime: true
+  # 摄像头权限（手势控制）：渲染进程是子进程，授权需同时写入 entitlements 与 entitlementsInherit
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
   gatekeeperAssess: false
   notarize: true
   extendInfo:
+    NSCameraUsageDescription: BTViewer 仅在播放页开启手势控制时使用摄像头识别手势，画面只在本机处理，不会上传。
     # 与 win 的 AppUserModelID / 协议注册保持一致
     CFBundleURLTypes:
       - CFBundleURLName: Magnet Link

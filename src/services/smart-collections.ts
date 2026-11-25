@@ -12,11 +12,12 @@ export interface SmartMatchContext {
   addedAt: number           // 任务/本地条目的加入时间；缺省视为很久以前
   kind?: 'video' | 'audio'  // 任务：含视频流 → video，否则有音频流 → audio；本地引用按自身类型
   now: number               // 当前时间（注入便于单测）
+  personIds?: string[]      // 条目的视频中出现过的人物 ID（人物合集）
 }
 
 // 创建时至少一条规则：空规则的动态合集与「全部」无差别，不允许
 export function hasSmartRule(rules: SmartCollectionRules): boolean {
-  return rules.kind !== undefined || rules.watchState !== undefined || rules.minRating !== undefined || rules.addedWithinDays !== undefined
+  return rules.kind !== undefined || rules.watchState !== undefined || rules.minRating !== undefined || rules.addedWithinDays !== undefined || rules.personId !== undefined
 }
 
 // 全部已声明规则须同时满足（AND）；未声明的规则不参与过滤
@@ -25,5 +26,6 @@ export function matchesSmartCollection(rules: SmartCollectionRules, ctx: SmartMa
   if (rules.minRating !== undefined && ctx.rating < rules.minRating) return false
   if (rules.watchState === 'unfinished' && !(ctx.watchPercent > 0 && ctx.watchPercent < 95)) return false
   if (rules.addedWithinDays !== undefined && (!ctx.addedAt || ctx.now - ctx.addedAt > rules.addedWithinDays * 86400000)) return false
+  if (rules.personId !== undefined && !(ctx.personIds ?? []).includes(rules.personId)) return false
   return true
 }

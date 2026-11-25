@@ -12,6 +12,8 @@ import type { LocalMediaEntry, MediaCollection, MediaCollectionItem, SmartCollec
 import { LOCAL_MEDIA_HASH } from '../types'
 import { hasMediaCollectionItem, isMediaCollectionItem, mediaCollectionItemKey } from '../services/media-collections'
 import { isSmartCollectionId, matchesSmartCollection, smartCollectionKey } from '../services/smart-collections'
+import { personIdOfFilterKey, personIdsOfPaths, type PersonSummary } from '../services/people'
+import { trailingDebounce } from '../services/debounce'
 interface FileListProps {
   torrent: TorrentStatus | null
   torrents: TorrentStatus[]
@@ -101,6 +103,24 @@ const FileList: React.FC<FileListProps> = ({ torrent, torrents, onSelectTorrent,
     }).catch(() => { if (active) setCollectionsLoaded(true) })
     return () => { active = false }
   }, [])
+  // 人物合集：人物列表与视频→人物映射从主进程拉取；分析入库后主进程广播 people:changed 触发刷新
+  const [people, setPeople] = useState<PersonSummary[]>([])
+  const [videoPersons, setVideoPersons] = useState<Record<string, string[]>>({})
+  useEffect(() => {
+    let active = true
+    const refresh = () => {
+      void Promise.all([ipc.peopleSummary(), ipc.peopleVideoMap()]).then(([summary, map]) => {
+        if (!active) return
+        if (summary.success && summary.data) setPeople(summary.data.people)
+        if (map.success && map.data) setVideoPersons(map.data)
+      }).catch(() => undefined)
+    }
+    const debounced = trailingDebounce(refresh, 800)
+    refresh()
+    let unsubscribe: () => void = () => undefined
+    try { unsubscribe = ipc.onPeopleChanged(debounced.call) } catch { /* 非 Electron 环境忽略 */ }
+    return () => { active = false; debounced.cancel(); unsubscribe() }
+  }, [])
   // 智能合集：定义从主进程拉取；匹配按当前库内容实时求值（评分/进度/类型都在渲染层手里）
   const [smartCollections, setSmartCollections] = useState<SmartCollection[]>([])
   useEffect(() => {
@@ -112,7 +132,7 @@ const FileList: React.FC<FileListProps> = ({ torrent, torrents, onSelectTorrent,
   }, [])
   useEffect(() => {
     if (!collectionsLoaded || activeCollectionId === 'all' || activeCollectionId === 'ungrouped' || collections.some((collection) => collection.id === activeCollectionId)) return
-    if (isSmartCollectionId(activeCollectionId)) return
+    if (isSmartCollectionId(activeCollectionId) || personIdOfFilterKey(activeCollectionId) !== null) return
     setActiveCollectionId('all')
     localStorage.setItem('btviewer-library-collection', 'all')
   }, [activeCollectionId, collections, collectionsLoaded])
@@ -125,20 +145,26 @@ const FileList: React.FC<FileListProps> = ({ torrent, torrents, onSelectTorrent,
   }
   const activeCollection = collections.find((collection) => collection.id === activeCollectionId) ?? null
   const activeSmart = isSmartCollectionId(activeCollectionId) ? smartCollections.find((collection) => smartCollectionKey(collection.id) === activeCollectionId) ?? null : null
+  // 人物筛选（虚拟合集）：选中人物时只显示其视频中出现过的条目
+  const activePersonId = personIdOfFilterKey(activeCollectionId)
+  const activePerson = people.find((person) => person.id === activePersonId) ?? null
+  const personPaths = useMemo(() => (activePersonId ? new Set(Object.keys(videoPersons).filter((path) => videoPersons[path].includes(activePersonId))) : null), [activePersonId, videoPersons])
   // 智能合集匹配上下文：观看进度 / 评分 / 加入时间 / 媒体类型都来自渲染层现有状态
   const smartContextForTask = (item: TorrentStatus) => ({
     watchPercent: watchPercent(watchMap[item.infoHash]),
     rating: ratingOf({ type: 'task', id: item.infoHash }),
     addedAt: item.addedAt || 0,
     kind: item.files.some((file) => file.type === 'video') ? 'video' as const : item.files.some((file) => file.type === 'audio') ? 'audio' as const : undefined,
-    now: Date.now()
+    now: Date.now(),
+    personIds: personIdsOfPaths(videoPersons, item.files.filter((file) => file.type === 'video').map((file) => file.path))
   })
   const smartContextForLocal = (entry: LocalMediaEntry) => ({
     watchPercent: watchPercent(localWatchMap[entry.path]),
     rating: ratingOf({ type: 'local', id: entry.path }),
     addedAt: entry.addedAt,
     kind: entry.type,
-    now: Date.now()
+    now: Date.now(),
+    personIds: personIdsOfPaths(videoPersons, [entry.path])
   })
   const smartMatchesItem = (collection: SmartCollection, item: MediaCollectionItem): boolean => {
     if (item.type === 'task') {
@@ -427,14 +453,14 @@ const FileList: React.FC<FileListProps> = ({ torrent, torrents, onSelectTorrent,
   }
 
   // 智能合集选中时按规则过滤（评分/进度状态在上方才声明，故独立于 collectionTorrents/Locals 求值）
-  const smartTasks = useMemo(() => activeSmart ? torrents.filter((item) => matchesSmartCollection(activeSmart.rules, smartContextForTask(item))) : null, [activeSmart, torrents, watchMap, ratings])
+  const smartTasks = useMemo(() => activeSmart ? torrents.filter((item) => matchesSmartCollection(activeSmart.rules, smartContextForTask(item))) : null, [activeSmart, torrents, watchMap, ratings, videoPersons])
   const smartLocals = useMemo(() => {
     if (!activeSmart) return null
     const text = keyword.trim().toLowerCase()
     return localLibrary.filter((entry) => matchesSmartCollection(activeSmart.rules, smartContextForLocal(entry)) && (!text || entry.name.toLowerCase().includes(text)))
-  }, [activeSmart, localLibrary, localWatchMap, ratings, keyword])
-  const effectiveTasks = smartTasks ?? collectionTorrents
-  const effectiveLocals = smartLocals ?? collectionLocals
+  }, [activeSmart, localLibrary, localWatchMap, ratings, keyword, videoPersons])
+  const effectiveTasks = useMemo(() => (smartTasks ?? collectionTorrents).filter((item) => !personPaths || item.files.some((file) => file.type === 'video' && personPaths.has(file.path))), [smartTasks, collectionTorrents, personPaths])
+  const effectiveLocals = useMemo(() => (smartLocals ?? collectionLocals).filter((entry) => !personPaths || personPaths.has(entry.path)), [smartLocals, collectionLocals, personPaths])
 
   // 库列表：网格 / 紧凑列表共用同一份数据与移除确认逻辑
   const confirmRemoveCard = (item: TorrentStatus) => setPending({ kind: 'task', item })
@@ -662,7 +688,7 @@ const FileList: React.FC<FileListProps> = ({ torrent, torrents, onSelectTorrent,
           </aside>
           <section className={`library-browser-main ${selectedKeys.size > 0 ? 'has-selection' : ''}`}>
             <div className="library-content-heading">
-              <div><span className="eyebrow">{t('library.collections')}</span><h3>{activeSmart?.name || activeCollection?.name || (activeCollectionId === 'ungrouped' ? t('library.ungrouped') : t('library.allItems'))}</h3><small>{t('library.itemCount', { count: activeSmart ? smartCount(activeSmart) : activeCollection ? collectionItemCount(activeCollection) : activeCollectionId === 'ungrouped' ? ungroupedCount : allMediaItems.length })}</small></div>
+              <div><span className="eyebrow">{t('library.collections')}</span><h3>{activeSmart?.name || activeCollection?.name || (activePersonId ? (activePerson?.name || t('people.unnamed')) : activeCollectionId === 'ungrouped' ? t('library.ungrouped') : t('library.allItems'))}</h3><small>{t('library.itemCount', { count: activeSmart ? smartCount(activeSmart) : activePersonId ? effectiveTasks.length + effectiveLocals.length : activeCollection ? collectionItemCount(activeCollection) : activeCollectionId === 'ungrouped' ? ungroupedCount : allMediaItems.length })}</small></div>
               <button className="small-button library-import" onClick={onImportLocal}>
                 <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                   <rect x="2.75" y="4.75" width="10.5" height="10.5" rx="2" />
@@ -775,6 +801,7 @@ const FileList: React.FC<FileListProps> = ({ torrent, torrents, onSelectTorrent,
           name={collectionDialog.mode === 'rename' ? collectionDialog.collection.name : collectionDialog.mode === 'smart-rename' ? collectionDialog.collection.name : ''}
           rules={collectionDialog.mode === 'smart-rename' ? collectionDialog.collection.rules : undefined}
           error={collectionError}
+          people={people}
           onSave={(value, rules) => saveCollectionDialog(collectionDialog, value, rules)}
           onClose={() => { setCollectionDialog(null); setCollectionError('') }}
         />}

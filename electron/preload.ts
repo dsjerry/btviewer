@@ -2,7 +2,8 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { SmartCollectionRules } from '../src/types'
 // 类型单一来源：接口定义在 src/services/ipc.ts，这里注解后方法签名不匹配会在编译期暴露
 import type { ElectronAPI } from '../src/services/ipc'
-import type { CompatProgressEvent, GlobalStat, TorrentStatus } from '../src/types'
+import type { AiModelId, CompatProgressEvent, GlobalStat, TorrentStatus } from '../src/types'
+import type { DetectedFaceDraft } from '../src/services/people'
 
 const electronAPI: ElectronAPI = {
   minimizeWindow: () => ipcRenderer.invoke('window:minimize'),
@@ -29,6 +30,30 @@ const electronAPI: ElectronAPI = {
     const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => callback(payload as { received: number; total: number })
     ipcRenderer.on('deno:install-progress', listener)
     return () => ipcRenderer.removeListener('deno:install-progress', listener)
+  },
+  aiModelStatus: () => ipcRenderer.invoke('models:status'),
+  installAiModel: (id: AiModelId) => ipcRenderer.invoke('models:install', id),
+  removeAiModel: (id: AiModelId) => ipcRenderer.invoke('models:remove', id),
+  onAiModelInstallProgress: (callback: (progress: { received: number; total: number }) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => callback(payload as { received: number; total: number })
+    ipcRenderer.on('models:install-progress', listener)
+    return () => ipcRenderer.removeListener('models:install-progress', listener)
+  },
+  peopleSummary: () => ipcRenderer.invoke('people:summary'),
+  peopleFaces: (personId: string) => ipcRenderer.invoke('people:faces', personId),
+  peopleVideoMap: () => ipcRenderer.invoke('people:video-map'),
+  peopleNextJob: () => ipcRenderer.invoke('people:next-job'),
+  peopleFrame: (path: string, t: number) => ipcRenderer.invoke('people:frame', path, t),
+  peopleSubmit: (key: string, duration: number, drafts: DetectedFaceDraft[]) => ipcRenderer.invoke('people:submit', key, duration, drafts),
+  peopleRename: (personId: string, name: string) => ipcRenderer.invoke('people:rename', personId, name),
+  peopleMerge: (fromIds: string[], toId: string) => ipcRenderer.invoke('people:merge', fromIds, toId),
+  peopleSplit: (faceIds: string[]) => ipcRenderer.invoke('people:split', faceIds),
+  peopleRemove: (personIds: string[]) => ipcRenderer.invoke('people:remove', personIds),
+  peopleClear: () => ipcRenderer.invoke('people:clear'),
+  onPeopleChanged: (callback: () => void) => {
+    const listener = () => callback()
+    ipcRenderer.on('people:changed', listener)
+    return () => ipcRenderer.removeListener('people:changed', listener)
   },
   removeTorrent: (infoHash: string, destroy = false) => ipcRenderer.invoke('torrent:remove', infoHash, destroy),
   pauseTorrent: (infoHash: string) => ipcRenderer.invoke('torrent:pause', infoHash),
